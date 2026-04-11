@@ -1,0 +1,49 @@
+{
+  "servers": {
+    "RS-SQL01": {
+      "trustServerCertificate": true,
+      "databases": {
+        "QMaster": {
+          "default": true,
+          "logins": {
+            "readonly": {
+              "default": true,
+              "user": "readonly",
+              "password": "REPLACE_WITH_PASSWORD"
+            },
+            "QMaster": {
+              "user": "QMaster",
+              "password": "REPLACE_WITH_PASSWORD"
+            }
+          }
+        },
+        "BugTracker": {
+          "logins": {
+            "readonly": {
+              "default": true,
+              "user": "readonly",
+              "password": "REPLACE_WITH_PASSWORD"
+            },
+            "BugTracker": {
+              "user": "BugTracker",
+              "password": "REPLACE_WITH_PASSWORD"
+            }
+          }
+        }
+      }
+    },
+    "localhost": {
+      "default": true,
+      "trustServerCertificate": true,
+      "databases": {
+        "x26QMaster": {
+          "logins": {
+            "windows-auth": {
+              "trustedConnection": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
