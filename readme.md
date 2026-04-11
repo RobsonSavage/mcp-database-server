@@ -2,6 +2,14 @@
 
 # MCP Database Server
 
+> **RobsonSavage fork (`@robsonsavage/database-server`)**
+> Extends the upstream [`@executeautomation/database-server`](https://github.com/executeautomation/mcp-database-server) with two features targeted at multi-database Windows environments:
+>
+> 1. **True Windows integrated authentication** for SQL Server via `msnodesqlv8` — connect as the current Windows user with no credentials in config.
+> 2. **Multi-connection registry mode** — register a single MCP entry that holds many servers/databases/logins, then route tool calls with `"use X on Y with Z"` addressing instead of spawning one MCP per combination.
+>
+> See **[SQL Server multi-connection mode](#sql-server-multi-connection-mode)** below.
+
 This MCP (Model Context Protocol) server provides database access capabilities to Claude, supporting SQLite, SQL Server, PostgreSQL, and MySQL databases.
 
 ## Installation
@@ -322,6 +330,107 @@ npm run watch
 - Node.js 18+
 - For SQL Server connectivity: SQL Server 2012 or later
 - For PostgreSQL connectivity: PostgreSQL 9.5 or later
+- For **SQL Server Windows integrated authentication**: the optional `msnodesqlv8` package (installed automatically as an optionalDependency if your machine can build it) plus a Microsoft ODBC Driver for SQL Server (e.g. "ODBC Driver 18 for SQL Server")
+
+## SQL Server multi-connection mode
+
+In addition to the legacy `--server / --database / --user / --password` CLI flags, the SQL Server adapter supports a **connection registry** loaded from a JSON file. This lets one MCP entry hold many (server, database, login) combinations and route each tool call to the right one.
+
+### Launch it
+
+```json
+"sql": {
+  "command": "cmd",
+  "args": [
+    "/c", "npx", "-y", "@robsonsavage/database-server",
+    "--sqlserver",
+    "--config", "C:/Users/you/.mcp-db-connections.json"
+  ]
+}
+```
+
+`--config` is mutually exclusive with `--server`/`--database`/`--user`/`--password`. Mix them and startup fails fast.
+
+### Registry file shape
+
+```json
+{
+  "servers": {
+    "RS-SQL01": {
+      "trustServerCertificate": true,
+      "default": true,
+      "databases": {
+        "QMaster": {
+          "default": true,
+          "logins": {
+            "readonly": {
+              "user": "readonly",
+              "password": "secret",
+              "default": true
+            },
+            "sa": { "user": "sa", "password": "secret" }
+          }
+        },
+        "BugTracker": {
+          "logins": {
+            "readonly": { "user": "readonly", "password": "secret", "default": true }
+          }
+        }
+      }
+    },
+    "(local)": {
+      "trustServerCertificate": true,
+      "databases": {
+        "x26QMaster": {
+          "logins": {
+            "windows": { "trustedConnection": true, "default": true }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Defaults
+
+Three independent default levels, each picked with `"default": true`:
+
+| Level | Used when the caller omits... |
+|------|------------------------------|
+| `servers["X"].default` | `server` |
+| `servers["X"].databases["Y"].default` | `database` |
+| `servers["X"].databases["Y"].logins["Z"].default` | `login` |
+
+Exactly one default is required at each level that has more than one sibling. Single-child levels don't need the flag. Zero or multiple defaults at a level with siblings → startup fails with a precise path.
+
+### Auth types per login
+
+- **SQL auth**: set `user` and `password`. Uses the default `mssql` entry (Tedious driver, pure JS).
+- **Windows integrated auth**: set `"trustedConnection": true` and omit `user`/`password`. Uses `mssql/msnodesqlv8`, connecting as the **current Windows user** via SSPI. Requires the optional `msnodesqlv8` package and a Microsoft ODBC Driver for SQL Server.
+
+Inherited fields: `trustServerCertificate`, `port`, and `options` set at the `server` level cascade to children unless overridden at the database or login level.
+
+### Tools added in registry mode
+
+When `--config` is in use, every existing tool (`read_query`, `write_query`, `list_tables`, `describe_table`, `export_query`, `create_table`, `alter_table`, `drop_table`, `append_insight`, `list_insights`) gains three **optional** parameters: `server`, `database`, `login`. Any combination can be supplied; missing levels fall through to the sticky connection (set by `use_connection`) and then to the registry defaults.
+
+Two **new** tools:
+
+- **`list_connections`** — returns the full registry tree with default markers and the auth type per leaf. Never emits passwords.
+- **`use_connection({ server?, database?, login? })`** — resolves the triple to a concrete leaf and pins it as the sticky connection for subsequent tool calls. Per-tool overrides still win over sticky for a single call.
+
+### Example resolution
+
+Given the registry above:
+
+- *"use QMaster on RS-SQL01 with readonly"* → `RS-SQL01 / QMaster / readonly`
+- *"use BugTracker"* → default server `RS-SQL01` → `BugTracker` → default login `readonly`
+- *"use x26QMaster"* → default server is `RS-SQL01`, which has no `x26QMaster` database → error listing available databases on `RS-SQL01`. Explicitness is required; there is no cross-server fuzzy matching.
+
+### Pool lifecycle
+
+Each resolved `(server, database, login)` leaf gets a dedicated connection pool, opened lazily on first use and reused across tool calls. Unused leaves cost nothing at startup.
 
 ## License
 

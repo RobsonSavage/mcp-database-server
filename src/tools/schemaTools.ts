@@ -57,7 +57,7 @@ export async function dropTable(tableName: string, confirm: boolean) {
     }
 
     // First check if table exists by directly querying for tables
-    const query = getListTablesQuery();
+    const query = await getListTablesQuery();
     const tables = await dbAll(query);
     const tableNames = tables.map(t => t.name);
     
@@ -84,7 +84,7 @@ export async function dropTable(tableName: string, confirm: boolean) {
 export async function listTables() {
   try {
     // Use adapter-specific query for listing tables
-    const query = getListTablesQuery();
+    const query = await getListTablesQuery();
     const tables = await dbAll(query);
     return formatSuccessResponse(tables.map((t) => t.name));
   } catch (error: any) {
@@ -104,7 +104,7 @@ export async function describeTable(tableName: string) {
     }
 
     // First check if table exists by directly querying for tables
-    const query = getListTablesQuery();
+    const query = await getListTablesQuery();
     const tables = await dbAll(query);
     const tableNames = tables.map(t => t.name);
     
@@ -113,7 +113,7 @@ export async function describeTable(tableName: string) {
     }
     
     // Use adapter-specific query for describing tables
-    const descQuery = getDescribeTableQuery(tableName);
+    const descQuery = await getDescribeTableQuery(tableName);
     const columns = await dbAll(descQuery);
     
     return formatSuccessResponse(columns.map((col) => ({

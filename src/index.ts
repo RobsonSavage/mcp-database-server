@@ -10,7 +10,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 // Import database utils
-import { initDatabase, closeDatabase, getDatabaseMetadata } from './db/index.js';
+import { initDatabase, initDatabasePool, closeDatabase, getDatabaseMetadata } from './db/index.js';
+import { ConnectionRegistry } from './config/loader.js';
 
 // Import handlers
 import { handleListResources, handleReadResource } from './handlers/resourceHandlers.js';
@@ -27,8 +28,8 @@ const logger = {
 // Configure the server
 const server = new Server(
   {
-    name: "executeautomation/database-server",
-    version: "1.1.0",
+    name: "robsonsavage/database-server",
+    version: "2.0.0",
   },
   {
     capabilities: {
@@ -44,6 +45,7 @@ if (args.length === 0) {
   logger.error("Please provide database connection information");
   logger.error("Usage for SQLite: node index.js <database_file_path>");
   logger.error("Usage for SQL Server: node index.js --sqlserver --server <server> --database <database> [--user <user> --password <password>]");
+  logger.error("Usage for SQL Server multi-connection: node index.js --sqlserver --config <path-to-connections.json>");
   logger.error("Usage for PostgreSQL: node index.js --postgresql --host <host> --database <database> [--user <user> --password <password> --port <port>]");
   logger.error("Usage for MySQL: node index.js --mysql --host <host> --database <database> [--user <user> --password <password> --port <port>]");
   logger.error("Usage for MySQL with AWS IAM: node index.js --mysql --aws-iam-auth --host <rds-endpoint> --database <database> --user <aws-username> --aws-region <region>");
@@ -53,36 +55,64 @@ if (args.length === 0) {
 // Parse arguments to determine database type and connection info
 let dbType = 'sqlite';
 let connectionInfo: any = null;
+let connectionRegistry: ConnectionRegistry | null = null;
+let configPath: string | null = null;
 
 // Check if using SQL Server
 if (args.includes('--sqlserver')) {
   dbType = 'sqlserver';
-  connectionInfo = {
-    server: '',
-    database: '',
-    user: undefined,
-    password: undefined
-  };
-  
-  // Parse SQL Server connection parameters
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--server' && i + 1 < args.length) {
-      connectionInfo.server = args[i + 1];
-    } else if (args[i] === '--database' && i + 1 < args.length) {
-      connectionInfo.database = args[i + 1];
-    } else if (args[i] === '--user' && i + 1 < args.length) {
-      connectionInfo.user = args[i + 1];
-    } else if (args[i] === '--password' && i + 1 < args.length) {
-      connectionInfo.password = args[i + 1];
-    } else if (args[i] === '--port' && i + 1 < args.length) {
-      connectionInfo.port = parseInt(args[i + 1], 10);
+
+  // --config takes precedence and switches to multi-connection mode.
+  const configIdx = args.indexOf('--config');
+  if (configIdx !== -1 && configIdx + 1 < args.length) {
+    configPath = args[configIdx + 1];
+
+    // Reject legacy flags when --config is used. Mixing the two modes would
+    // silently ignore one set of settings — better to fail fast.
+    const legacyFlags = ['--server', '--database', '--user', '--password', '--port'];
+    const conflicts = legacyFlags.filter(f => args.includes(f));
+    if (conflicts.length > 0) {
+      logger.error(
+        `Error: --config cannot be combined with legacy flags (${conflicts.join(', ')}). ` +
+        `Move all connection details into the JSON config file.`
+      );
+      process.exit(1);
     }
-  }
-  
-  // Validate SQL Server connection info
-  if (!connectionInfo.server || !connectionInfo.database) {
-    logger.error("Error: SQL Server requires --server and --database parameters");
-    process.exit(1);
+
+    try {
+      connectionRegistry = ConnectionRegistry.load(configPath);
+    } catch (err) {
+      logger.error(`Error loading connection config: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  } else {
+    connectionInfo = {
+      server: '',
+      database: '',
+      user: undefined,
+      password: undefined
+    };
+
+    // Parse SQL Server connection parameters
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--server' && i + 1 < args.length) {
+        connectionInfo.server = args[i + 1];
+      } else if (args[i] === '--database' && i + 1 < args.length) {
+        connectionInfo.database = args[i + 1];
+      } else if (args[i] === '--user' && i + 1 < args.length) {
+        connectionInfo.user = args[i + 1];
+      } else if (args[i] === '--password' && i + 1 < args.length) {
+        connectionInfo.password = args[i + 1];
+      } else if (args[i] === '--port' && i + 1 < args.length) {
+        connectionInfo.port = parseInt(args[i + 1], 10);
+      }
+    }
+
+    // Validate SQL Server connection info
+    if (!connectionInfo.server || !connectionInfo.database) {
+      logger.error("Error: SQL Server requires --server and --database parameters (or use --config <path>)");
+      process.exit(1);
+    }
   }
 } 
 // Check if using PostgreSQL
@@ -237,23 +267,36 @@ async function runServer() {
     if (dbType === 'sqlite') {
       logger.info(`Database path: ${connectionInfo}`);
     } else if (dbType === 'sqlserver') {
-      logger.info(`Server: ${connectionInfo.server}, Database: ${connectionInfo.database}`);
+      if (connectionRegistry) {
+        logger.info(`Multi-connection mode: loaded ${configPath}`);
+      } else {
+        logger.info(`Server: ${connectionInfo.server}, Database: ${connectionInfo.database}`);
+      }
     } else if (dbType === 'postgresql') {
       logger.info(`Host: ${connectionInfo.host}, Database: ${connectionInfo.database}`);
     } else if (dbType === 'mysql') {
       logger.info(`Host: ${connectionInfo.host}, Database: ${connectionInfo.database}`);
     }
-    
+
     // Initialize the database
-    await initDatabase(connectionInfo, dbType);
-    
-    const dbInfo = getDatabaseMetadata();
-    logger.info(`Connected to ${dbInfo.name} database`);
-    
+    if (connectionRegistry) {
+      await initDatabasePool(connectionRegistry);
+      const description = connectionRegistry.describe();
+      const leafCount = description.servers.reduce(
+        (sum, s) => sum + s.databases.reduce((dSum, d) => dSum + d.logins.length, 0),
+        0
+      );
+      logger.info(`Connection registry ready (${description.servers.length} servers, ${leafCount} total connections).`);
+    } else {
+      await initDatabase(connectionInfo, dbType);
+      const dbInfo = await getDatabaseMetadata();
+      logger.info(`Connected to ${dbInfo.name} database`);
+    }
+
     logger.info('Starting MCP server...');
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    
+
     logger.info('Server running. Press Ctrl+C to exit.');
   } catch (error) {
     logger.error("Failed to initialize:", error);

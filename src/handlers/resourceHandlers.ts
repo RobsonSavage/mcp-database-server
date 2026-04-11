@@ -6,10 +6,10 @@ import { dbAll, getListTablesQuery, getDescribeTableQuery, getDatabaseMetadata }
  */
 export async function handleListResources() {
   try {
-    const dbInfo = getDatabaseMetadata();
+    const dbInfo = await getDatabaseMetadata();
     const dbType = dbInfo.type;
     let resourceBaseUrl: URL;
-    
+
     // Create appropriate URL based on database type
     if (dbType === 'sqlite' && dbInfo.path) {
       resourceBaseUrl = new URL(`sqlite:///${dbInfo.path}`);
@@ -18,11 +18,11 @@ export async function handleListResources() {
     } else {
       resourceBaseUrl = new URL(`db:///database`);
     }
-    
+
     const SCHEMA_PATH = "schema";
 
     // Use adapter-specific query to list tables
-    const query = getListTablesQuery();
+    const query = await getListTablesQuery();
     const result = await dbAll(query);
     
     return {
@@ -56,7 +56,7 @@ export async function handleReadResource(uri: string) {
     }
 
     // Use adapter-specific query to describe the table
-    const query = getDescribeTableQuery(tableName!);
+    const query = await getDescribeTableQuery(tableName!);
     const result = await dbAll(query);
 
     return {

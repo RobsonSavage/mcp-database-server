@@ -1,13 +1,14 @@
 {
-    "name": "@executeautomation/database-server",
-    "version": "1.1.0",
-    "description": "MCP server for interacting with SQLite and SQL Server databases by ExecuteAutomation",
+    "name": "@robsonsavage/database-server",
+    "version": "2.0.0",
+    "description": "MCP server for SQLite, SQL Server, PostgreSQL and MySQL. Fork of @executeautomation/database-server with Windows integrated auth and multi-connection routing.",
     "license": "MIT",
-    "author": "ExecuteAutomation, Ltd (https://executeautomation.com)",
-    "homepage": "https://github.com/executeautomation/mcp-database-server",
-    "bugs": "https://github.com/executeautomation/database-server/issues",
+    "author": "RobsonSavage (fork) — original by ExecuteAutomation, Ltd",
+    "homepage": "https://github.com/RobsonSavage/mcp-database-server",
+    "bugs": "https://github.com/RobsonSavage/mcp-database-server/issues",
     "type": "module",
     "bin": {
+        "rs-database-server": "dist/src/index.js",
         "ea-database-server": "dist/src/index.js"
     },
     "files": [
@@ -29,6 +30,9 @@
         "mysql2": "^3.14.1",
         "pg": "^8.11.3",
         "sqlite3": "5.1.7"
+    },
+    "optionalDependencies": {
+        "msnodesqlv8": "^4.4.0"
     },
     "devDependencies": {
         "@types/mssql": "^9.1.5",
