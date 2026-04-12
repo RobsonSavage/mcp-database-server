@@ -3,7 +3,7 @@
 > **`@robsonsavage/database-server`** &mdash; a fork of [`@executeautomation/database-server`](https://github.com/executeautomation/mcp-database-server) built for multi-database Windows environments.
 >
 > - **Windows integrated authentication** for SQL Server via `msnodesqlv8` &mdash; connect as the current Windows user with no credentials on disk.
-> - **Multi-connection registry** &mdash; one MCP entry serves many servers, databases, and logins. Route tool calls with `use_connection` instead of spawning one MCP per combination.
+> - **Multi-connection registry (SQL Server only)** &mdash; one MCP entry serves many SQL Server instances, databases, and logins. Route tool calls with `use_connection` instead of spawning one MCP per combination.
 > - **Env-var credential indirection** &mdash; `${env:VAR}` references in the registry JSON resolve at connect time so plaintext secrets never touch config files.
 
 Supports **SQLite**, **SQL Server**, **PostgreSQL**, and **MySQL**.
@@ -41,9 +41,11 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
 }
 ```
 
-## Connection registry
+## Connection registry (SQL Server only)
 
-The `--config` flag loads a JSON file that defines servers, databases, and logins in a single tree. This replaces the legacy `--server / --database / --user / --password` CLI flags (the two styles are mutually exclusive).
+The connection registry is **exclusive to SQL Server**. SQLite, PostgreSQL, and MySQL each support a single database per MCP process using the legacy CLI flags described in [Legacy single-connection mode](#legacy-single-connection-mode). To use multiple databases with those engines, register a separate MCP entry for each.
+
+The `--config` flag loads a JSON file that defines servers, databases, and logins in a single tree. It requires `--sqlserver` and replaces the legacy `--server / --database / --user / --password` CLI flags (the two styles are mutually exclusive).
 
 ### Registry shape
 
