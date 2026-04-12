@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 
+// Node 22+ removed buffer.SlowBuffer, which the ancient buffer-equal-constant-time
+// package (pulled in via tedious → jsonwebtoken → jwa) dereferences at module load.
+// Shim it before anything else imports mssql, otherwise any SQL Server adapter init
+// crashes with "Cannot read properties of undefined (reading 'prototype')".
+import { createRequire as __cr } from 'node:module';
+{
+  const __buf = __cr(import.meta.url)('buffer');
+  if (!__buf.SlowBuffer) __buf.SlowBuffer = __buf.Buffer;
+}
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -17,6 +27,10 @@ import { ConnectionRegistry } from './config/loader.js';
 import { handleListResources, handleReadResource } from './handlers/resourceHandlers.js';
 import { handleListTools, handleToolCall } from './handlers/toolHandlers.js';
 
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json');
+
 // Setup a logger that uses stderr instead of stdout to avoid interfering with MCP communications
 const logger = {
   log: (...args: any[]) => console.error('[INFO]', ...args),
@@ -29,7 +43,7 @@ const logger = {
 const server = new Server(
   {
     name: "robsonsavage/database-server",
-    version: "2.0.0",
+    version: pkg.version,
   },
   {
     capabilities: {
@@ -57,6 +71,14 @@ let dbType = 'sqlite';
 let connectionInfo: any = null;
 let connectionRegistry: ConnectionRegistry | null = null;
 let configPath: string | null = null;
+
+function consumeArgValue(args: string[], i: number, flag: string): string {
+  if (i + 1 >= args.length || args[i + 1].startsWith('--')) {
+    logger.error(`Error: ${flag} requires a value`);
+    process.exit(1);
+  }
+  return args[i + 1];
+}
 
 // Check if using SQL Server
 if (args.includes('--sqlserver')) {
@@ -95,16 +117,16 @@ if (args.includes('--sqlserver')) {
 
     // Parse SQL Server connection parameters
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--server' && i + 1 < args.length) {
-        connectionInfo.server = args[i + 1];
-      } else if (args[i] === '--database' && i + 1 < args.length) {
-        connectionInfo.database = args[i + 1];
-      } else if (args[i] === '--user' && i + 1 < args.length) {
-        connectionInfo.user = args[i + 1];
-      } else if (args[i] === '--password' && i + 1 < args.length) {
-        connectionInfo.password = args[i + 1];
-      } else if (args[i] === '--port' && i + 1 < args.length) {
-        connectionInfo.port = parseInt(args[i + 1], 10);
+      if (args[i] === '--server') {
+        connectionInfo.server = consumeArgValue(args, i, '--server');
+      } else if (args[i] === '--database') {
+        connectionInfo.database = consumeArgValue(args, i, '--database');
+      } else if (args[i] === '--user') {
+        connectionInfo.user = consumeArgValue(args, i, '--user');
+      } else if (args[i] === '--password') {
+        connectionInfo.password = consumeArgValue(args, i, '--password');
+      } else if (args[i] === '--port') {
+        connectionInfo.port = parseInt(consumeArgValue(args, i, '--port'), 10);
       }
     }
 
@@ -125,25 +147,25 @@ else if (args.includes('--postgresql') || args.includes('--postgres')) {
     password: undefined,
     port: undefined,
     ssl: undefined,
-    connectionTimeout: undefined
+    connectionTimeoutMs: undefined
   };
   
   // Parse PostgreSQL connection parameters
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--host' && i + 1 < args.length) {
-      connectionInfo.host = args[i + 1];
-    } else if (args[i] === '--database' && i + 1 < args.length) {
-      connectionInfo.database = args[i + 1];
-    } else if (args[i] === '--user' && i + 1 < args.length) {
-      connectionInfo.user = args[i + 1];
-    } else if (args[i] === '--password' && i + 1 < args.length) {
-      connectionInfo.password = args[i + 1];
-    } else if (args[i] === '--port' && i + 1 < args.length) {
-      connectionInfo.port = parseInt(args[i + 1], 10);
-    } else if (args[i] === '--ssl' && i + 1 < args.length) {
-      connectionInfo.ssl = args[i + 1] === 'true';
-    } else if (args[i] === '--connection-timeout' && i + 1 < args.length) {
-      connectionInfo.connectionTimeout = parseInt(args[i + 1], 10);
+    if (args[i] === '--host') {
+      connectionInfo.host = consumeArgValue(args, i, '--host');
+    } else if (args[i] === '--database') {
+      connectionInfo.database = consumeArgValue(args, i, '--database');
+    } else if (args[i] === '--user') {
+      connectionInfo.user = consumeArgValue(args, i, '--user');
+    } else if (args[i] === '--password') {
+      connectionInfo.password = consumeArgValue(args, i, '--password');
+    } else if (args[i] === '--port') {
+      connectionInfo.port = parseInt(consumeArgValue(args, i, '--port'), 10);
+    } else if (args[i] === '--ssl') {
+      connectionInfo.ssl = consumeArgValue(args, i, '--ssl') === 'true';
+    } else if (args[i] === '--connection-timeout') {
+      connectionInfo.connectionTimeoutMs = parseInt(consumeArgValue(args, i, '--connection-timeout'), 10);
     }
   }
   
@@ -163,33 +185,33 @@ else if (args.includes('--mysql')) {
     password: undefined,
     port: undefined,
     ssl: undefined,
-    connectionTimeout: undefined,
+    connectionTimeoutMs: undefined,
     awsIamAuth: false,
     awsRegion: undefined
   };
   // Parse MySQL connection parameters
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--host' && i + 1 < args.length) {
-      connectionInfo.host = args[i + 1];
-    } else if (args[i] === '--database' && i + 1 < args.length) {
-      connectionInfo.database = args[i + 1];
-    } else if (args[i] === '--user' && i + 1 < args.length) {
-      connectionInfo.user = args[i + 1];
-    } else if (args[i] === '--password' && i + 1 < args.length) {
-      connectionInfo.password = args[i + 1];
-    } else if (args[i] === '--port' && i + 1 < args.length) {
-      connectionInfo.port = parseInt(args[i + 1], 10);
-    } else if (args[i] === '--ssl' && i + 1 < args.length) {
-      const sslVal = args[i + 1];
+    if (args[i] === '--host') {
+      connectionInfo.host = consumeArgValue(args, i, '--host');
+    } else if (args[i] === '--database') {
+      connectionInfo.database = consumeArgValue(args, i, '--database');
+    } else if (args[i] === '--user') {
+      connectionInfo.user = consumeArgValue(args, i, '--user');
+    } else if (args[i] === '--password') {
+      connectionInfo.password = consumeArgValue(args, i, '--password');
+    } else if (args[i] === '--port') {
+      connectionInfo.port = parseInt(consumeArgValue(args, i, '--port'), 10);
+    } else if (args[i] === '--ssl') {
+      const sslVal = consumeArgValue(args, i, '--ssl');
       if (sslVal === 'true') connectionInfo.ssl = true;
       else if (sslVal === 'false') connectionInfo.ssl = false;
       else connectionInfo.ssl = sslVal;
-    } else if (args[i] === '--connection-timeout' && i + 1 < args.length) {
-      connectionInfo.connectionTimeout = parseInt(args[i + 1], 10);
+    } else if (args[i] === '--connection-timeout') {
+      connectionInfo.connectionTimeoutMs = parseInt(consumeArgValue(args, i, '--connection-timeout'), 10);
     } else if (args[i] === '--aws-iam-auth') {
       connectionInfo.awsIamAuth = true;
-    } else if (args[i] === '--aws-region' && i + 1 < args.length) {
-      connectionInfo.awsRegion = args[i + 1];
+    } else if (args[i] === '--aws-region') {
+      connectionInfo.awsRegion = consumeArgValue(args, i, '--aws-region');
     }
   }
   // Validate MySQL connection info
@@ -249,13 +271,15 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Add global error handler
+// Add global error handler — exit after logging since Node is in undefined state
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught exception:', error);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
 });
 
 /**

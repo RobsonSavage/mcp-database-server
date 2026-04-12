@@ -1,4 +1,5 @@
-import { DbAdapter } from "./adapter.js";
+import type * as sql from "mssql";
+import { DbAdapter, assertSafeIdentifier } from "./adapter.js";
 
 // We dynamically import the correct mssql entry point at init() time so that
 // msnodesqlv8 remains an optional dependency — users who only use SQL auth via
@@ -17,8 +18,8 @@ type MssqlModule = typeof import('mssql');
  */
 export class SqlServerAdapter implements DbAdapter {
   private sql: MssqlModule | null = null;
-  private pool: any = null;
-  private readonly config: any;
+  private pool: sql.ConnectionPool | null = null;
+  private readonly config: sql.config;
   private readonly server: string;
   private readonly database: string;
   private readonly trustedConnection: boolean;
@@ -29,29 +30,63 @@ export class SqlServerAdapter implements DbAdapter {
     user?: string;
     password?: string;
     port?: number;
+    /** Connection timeout in milliseconds. Converted to seconds for mssql driver. */
+    connectionTimeoutMs?: number;
     trustServerCertificate?: boolean;
+    multipleActiveResultSets?: boolean;
     trustedConnection?: boolean;
-    options?: any;
+    /** ODBC driver name for msnodesqlv8 (e.g. "ODBC Driver 18 for SQL Server"). */
+    driver?: string;
+    options?: Record<string, unknown>;
   }) {
     this.server = connectionInfo.server;
     this.database = connectionInfo.database;
     this.trustedConnection = connectionInfo.trustedConnection === true;
 
-    const baseOptions = {
-      trustServerCertificate: connectionInfo.trustServerCertificate ?? true,
+    // Default changed to false: a published npm package pointing at production
+    // SQL Server instances must not silently disable TLS verification. Users on
+    // self-signed dev certs must set trustServerCertificate: true explicitly.
+    const baseOptions: Record<string, unknown> = {
+      trustServerCertificate: connectionInfo.trustServerCertificate ?? false,
+      enableArithAbort: true,
       ...(connectionInfo.options ?? {}),
     };
 
+    // MARS (Multiple Active Result Sets) — for msnodesqlv8/ODBC we inject it
+    // into the connection string via beforeConnect. For Tedious the pool handles
+    // concurrency natively, but we store the flag for consistency and diagnostics.
+    const mars = connectionInfo.multipleActiveResultSets ?? true;
+
+    const port = connectionInfo.port ?? 1433;
+    // mssql connectionTimeout is in seconds; config uses milliseconds for Node consistency.
+    const connectionTimeoutSec = Math.ceil((connectionInfo.connectionTimeoutMs ?? 15000) / 1000);
+
     if (this.trustedConnection) {
       // msnodesqlv8 shape — no user/password, trustedConnection lives under options.
+      // Port must be included so non-default ports are honored; msnodesqlv8 accepts
+      // `port` at the top level the same way Tedious does.
       this.config = {
         server: connectionInfo.server,
         database: connectionInfo.database,
+        port,
+        connectionTimeout: connectionTimeoutSec,
+        // Override the ODBC driver in the connection string for msnodesqlv8.
+        // mssql defaults to "SQL Server Native Client 11.0" on Windows, which
+        // is rarely installed. Replace it with a modern ODBC driver.
+        beforeConnect: (cfg: any) => {
+            if (cfg.conn_str) {
+              const driver = connectionInfo.driver ?? 'ODBC Driver 18 for SQL Server';
+              cfg.conn_str = cfg.conn_str.replace(/Driver=\{[^}]*\}|Driver=[^;]*/i, `Driver={${driver}}`);
+              if (mars && !cfg.conn_str.includes('MultipleActiveResultSets')) {
+                cfg.conn_str += ';MultipleActiveResultSets=True';
+              }
+            }
+          },
         options: {
           ...baseOptions,
           trustedConnection: true,
-        },
-      };
+        } as sql.config['options'],
+      } as sql.config;
     } else {
       if (!connectionInfo.user || !connectionInfo.password) {
         throw new Error(
@@ -65,9 +100,12 @@ export class SqlServerAdapter implements DbAdapter {
         database: connectionInfo.database,
         user: connectionInfo.user,
         password: connectionInfo.password,
-        port: connectionInfo.port ?? 1433,
-        options: baseOptions,
+        port,
+        connectionTimeout: connectionTimeoutSec,
+        options: baseOptions as sql.config['options'],
       };
+      // Note: MARS is an ODBC/msnodesqlv8 concept. Tedious handles concurrency
+      // via the mssql connection pool, so no beforeConnect hook needed here.
     }
   }
 
@@ -88,9 +126,15 @@ export class SqlServerAdapter implements DbAdapter {
   }
 
   private async loadDriver(): Promise<MssqlModule> {
+    // mssql is pure CJS with Object.assign-style exports, so Node's ESM-CJS interop
+    // doesn't lift named exports onto the dynamic-import namespace. ConnectionPool,
+    // Int, etc. only exist on `.default`. Unwrap it; fall back to the namespace
+    // itself if a future mssql build ships as real ESM.
+    const unwrap = (ns: any): MssqlModule => (ns?.default ?? ns) as MssqlModule;
+
     if (this.trustedConnection) {
       try {
-        return (await import('mssql/msnodesqlv8')) as unknown as MssqlModule;
+        return unwrap(await import('mssql/msnodesqlv8.js'));
       } catch (err) {
         throw new Error(
           `Windows integrated authentication requested but 'msnodesqlv8' is not installed. ` +
@@ -101,7 +145,20 @@ export class SqlServerAdapter implements DbAdapter {
         );
       }
     }
-    return (await import('mssql')) as unknown as MssqlModule;
+    return unwrap(await import('mssql'));
+  }
+
+  /**
+   * Replace `?` placeholders with `@param0`, `@param1`, ... using an explicit
+   * parameter index. The previous implementation used the second argument of
+   * the replace callback as the index, but without capture groups that is the
+   * CHARACTER OFFSET of the match, not the match index — so queries with more
+   * than one parameter generated `@param0`, `@param15`, ... and silently
+   * misbound. Track the index explicitly.
+   */
+  private prepareParams(query: string): string {
+    let idx = 0;
+    return query.replace(/\?/g, () => `@param${idx++}`);
   }
 
   async all(query: string, params: any[] = []): Promise<any[]> {
@@ -111,10 +168,14 @@ export class SqlServerAdapter implements DbAdapter {
 
     try {
       const request = this.pool.request();
-      params.forEach((param, index) => {
-        request.input(`param${index}`, param);
-      });
-      const preparedQuery = query.replace(/\?/g, (_, i) => `@param${i}`);
+      const preparedQuery = (params && params.length > 0)
+        ? (() => {
+            params.forEach((param, index) => {
+              request.input(`param${index}`, param);
+            });
+            return this.prepareParams(query);
+          })()
+        : query;
       const result = await request.query(preparedQuery);
       return result.recordset;
     } catch (err) {
@@ -129,26 +190,29 @@ export class SqlServerAdapter implements DbAdapter {
 
     try {
       const request = this.pool.request();
-      params.forEach((param, index) => {
-        request.input(`param${index}`, param);
-      });
-      const preparedQuery = query.replace(/\?/g, (_, i) => `@param${i}`);
+      const preparedQuery = (params && params.length > 0)
+        ? (() => {
+            params.forEach((param, index) => {
+              request.input(`param${index}`, param);
+            });
+            return this.prepareParams(query);
+          })()
+        : query;
 
       let lastID = 0;
+      let changes = 0;
       if (query.trim().toUpperCase().startsWith('INSERT')) {
         request.output('insertedId', this.sql.Int, 0);
         const updatedQuery = `${preparedQuery}; SELECT @insertedId = SCOPE_IDENTITY();`;
         const result = await request.query(updatedQuery);
-        lastID = result.output.insertedId || 0;
+        lastID = (result.output as any).insertedId || 0;
+        changes = result.rowsAffected[0] || 0;
       } else {
-        await request.query(preparedQuery);
-        lastID = 0;
+        const result = await request.query(preparedQuery);
+        changes = result.rowsAffected[0] || 0;
       }
 
-      return {
-        changes: this.getAffectedRows(query, lastID),
-        lastID: lastID,
-      };
+      return { changes, lastID };
     } catch (err) {
       throw new Error(`SQL Server query error: ${(err as Error).message}`);
     }
@@ -187,12 +251,13 @@ export class SqlServerAdapter implements DbAdapter {
     return "SELECT TABLE_NAME as name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME";
   }
 
-  getDescribeTableQuery(tableName: string): string {
-    return `
+  getDescribeTableQuery(tableName: string): { query: string; params: any[] } {
+    assertSafeIdentifier(tableName, 'table name');
+    const query = `
       SELECT
         c.COLUMN_NAME as name,
         c.DATA_TYPE as type,
-        CASE WHEN c.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END as notnull,
+        CASE WHEN c.IS_NULLABLE = 'NO' THEN 1 ELSE 0 END as notnull,
         CASE WHEN pk.CONSTRAINT_TYPE = 'PRIMARY KEY' THEN 1 ELSE 0 END as pk,
         c.COLUMN_DEFAULT as dflt_value
       FROM
@@ -202,17 +267,11 @@ export class SqlServerAdapter implements DbAdapter {
       LEFT JOIN
         INFORMATION_SCHEMA.TABLE_CONSTRAINTS pk ON kcu.CONSTRAINT_NAME = pk.CONSTRAINT_NAME AND pk.CONSTRAINT_TYPE = 'PRIMARY KEY'
       WHERE
-        c.TABLE_NAME = '${tableName}'
+        c.TABLE_NAME = ?
       ORDER BY
         c.ORDINAL_POSITION
     `;
+    return { query, params: [tableName] };
   }
 
-  private getAffectedRows(query: string, lastID: number): number {
-    const queryType = query.trim().split(' ')[0].toUpperCase();
-    if (queryType === 'INSERT' && lastID > 0) {
-      return 1;
-    }
-    return 0;
-  }
 }

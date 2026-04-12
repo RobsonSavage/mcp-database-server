@@ -8,7 +8,7 @@ on a new Windows machine.
 
 | File | Purpose |
 |---|---|
-| `robsonsavage-database-server-2.0.0.tgz` | npm tarball built via `npm pack` — installs the `rs-database-server` global binary |
+| `robsonsavage-database-server-2.0.2.tgz` | npm tarball built via `npm pack` — installs the `rs-database-server` global binary |
 | `rs-database-connections.template.json` | Sanitized connection registry template — populate with real values on the target machine |
 | `INSTALL.md` | This file |
 
@@ -27,7 +27,7 @@ bash-style `$USERPROFILE`; adjust if your shell expands variables differently).
 ### 1. Install the CLI globally from the tarball
 
 ```bash
-npm install -g ./robsonsavage-database-server-2.0.0.tgz
+npm install -g ./robsonsavage-database-server-2.0.2.tgz
 ```
 
 This installs the `rs-database-server` (and `ea-database-server`) binaries to
@@ -46,13 +46,63 @@ cp rs-database-connections.template.json "$USERPROFILE/.claude/rs-database-conne
 
 Then **edit** `%USERPROFILE%\.claude\rs-database-connections.json`:
 
-- Replace `YOUR-SQL-HOST` with the real SQL Server hostname
-- Replace `REPLACE_WITH_USERNAME` / `REPLACE_WITH_PASSWORD` with real credentials,
-  **or** delete the `sql-readonly` login and keep the `windows-auth` login for
-  Windows integrated authentication (`trustedConnection: true`)
-- Remove the `_comment` and `_schema` illustrative keys
+- Replace `RS-SQL01` (and similar) with the real SQL Server hostname
+- Credentials use **env-var indirection** — `user` and `password` strings of the
+  form `${env:VAR_NAME}` resolve from `process.env` at connect time, so the JSON
+  itself never contains plaintext secrets. See the "Credential env vars" section
+  below for naming and how to populate them on Windows.
+- Or delete the SQL login entries and keep a `trustedConnection: true` login for
+  Windows integrated authentication — no credentials needed on disk at all.
 - Keep exactly one `default: true` at each level that has siblings (server,
   database, login). Single-entry levels may omit `default` entirely.
+- `connectionTimeoutMs` (optional, milliseconds) controls how long the driver waits
+  for a connection to be established. Default: **15000** (15 seconds). Set it at
+  server level to apply to all logins, or override per login. Example:
+  `"connectionTimeoutMs": 30000` for 30 seconds.
+- `multipleActiveResultSets` (optional, boolean) enables MARS on the connection.
+  Default: **true**. For Windows auth (`trustedConnection: true`) this is injected
+  into the ODBC connection string; for SQL auth (Tedious) the pool handles
+  concurrency natively but the flag is stored for consistency.
+- `driver` (optional, string) specifies the ODBC driver name used by
+  `msnodesqlv8` for Windows integrated auth connections. Only relevant when
+  `trustedConnection: true` — SQL auth uses Tedious (pure JS) and ignores this.
+  Default: **`ODBC Driver 18 for SQL Server`**. The `mssql` library's built-in
+  default is `SQL Server Native Client 11.0`, which is rarely installed on modern
+  machines — this override fixes the common "Data source name not found" error.
+  Set at server level or override per login. Example:
+  `"driver": "ODBC Driver 17 for SQL Server"` for older driver installs.
+
+### Credential env vars
+
+Any `user` or `password` string of the form `${env:VAR_NAME}` is resolved from
+`process.env` when the connection is opened. The MCP inherits env vars from the
+process that spawns it (Claude Code), which inherits from your user session — so
+setting them persistently via `setx` (or the System Properties → Environment
+Variables UI) is enough.
+
+The shipped template uses these names:
+
+| Variable | Used by |
+|---|---|
+| `RS_SQL01_READONLY_USER` / `RS_SQL01_READONLY_PASSWORD` | `RS-SQL01` / `QMaster` + `BugTracker` readonly logins |
+| `RS_SQL01_QMASTER_USER` / `RS_SQL01_QMASTER_PASSWORD` | `RS-SQL01` / `QMaster` / `QMaster` login |
+| `RS_SQL01_BUGTRACKER_USER` / `RS_SQL01_BUGTRACKER_PASSWORD` | `RS-SQL01` / `BugTracker` / `BugTracker` login |
+
+Set them persistently (PowerShell, new shell required to pick up):
+
+```powershell
+setx RS_SQL01_READONLY_USER "readonly"
+setx RS_SQL01_READONLY_PASSWORD "<secret>"
+```
+
+Multiple logins can share a single var pair by pointing at the same `${env:...}`
+reference — useful when one SQL account (e.g. `readonly`) is reused across
+several databases on the same server. Conversely, distinct logins under the
+same database just reference distinct var names.
+
+Missing/empty env vars throw a clear error at connect time naming both the
+registry path (`servers['X'].databases['Y'].logins['Z'].password`) and the
+unresolved variable.
 
 ### 3. Register the MCP with Claude Code (user scope)
 
@@ -107,9 +157,11 @@ restart Claude Code to pick up the new binary.
 ## Security notes
 
 - **Never commit a populated `rs-database-connections.json`.** The template in
-  this folder has placeholders only, which is why it is safe to ship.
-- **Do not put real credentials on the thumb drive.** Carry the template, type
-  the secrets on the target machine.
+  this folder uses `${env:...}` references only, which is why it is safe to ship.
+- **Do not put real credentials on the thumb drive.** Carry the template; set
+  the env vars on the target machine via `setx` or the System Properties UI.
+- **Never embed plaintext passwords in the JSON.** Use `${env:VAR}` indirection
+  — the loader will refuse to fall back silently if a referenced var is unset.
 - The registry file lives in `%USERPROFILE%\.claude\`, readable by the
   current Windows user only. Treat it like `.pgpass` or `~/.aws/credentials`.
 - Prefer `trustedConnection: true` (Windows integrated auth) over embedded

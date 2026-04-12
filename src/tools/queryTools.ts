@@ -6,13 +6,20 @@ import { formatErrorResponse, formatSuccessResponse, convertToCSV } from '../uti
  * @param query SQL query to execute
  * @returns Query results
  */
-export async function readQuery(query: string) {
+export async function readQuery(query: string, params: any[] = []) {
   try {
-    if (!query.trim().toLowerCase().startsWith("select")) {
+    const trimmed = query.trim();
+    // Strip leading block comments before checking the query type
+    const stripped = trimmed.replace(/^\/\*[\s\S]*?\*\/\s*/g, '');
+    if (!stripped.toLowerCase().startsWith("select") && !stripped.toLowerCase().startsWith("with")) {
       throw new Error("Only SELECT queries are allowed with read_query");
     }
+    // Reject multiple statements to prevent piggyback attacks
+    if (trimmed.includes(';')) {
+      throw new Error("Multiple statements are not allowed in read_query");
+    }
 
-    const result = await dbAll(query);
+    const result = await dbAll(query, params);
     return formatSuccessResponse(result);
   } catch (error: any) {
     throw new Error(`SQL Error: ${error.message}`);
@@ -24,19 +31,19 @@ export async function readQuery(query: string) {
  * @param query SQL query to execute
  * @returns Information about affected rows
  */
-export async function writeQuery(query: string) {
+export async function writeQuery(query: string, params: any[] = []) {
   try {
     const lowerQuery = query.trim().toLowerCase();
-    
+
     if (lowerQuery.startsWith("select")) {
       throw new Error("Use read_query for SELECT operations");
     }
-    
+
     if (!(lowerQuery.startsWith("insert") || lowerQuery.startsWith("update") || lowerQuery.startsWith("delete"))) {
       throw new Error("Only INSERT, UPDATE, or DELETE operations are allowed with write_query");
     }
 
-    const result = await dbRun(query);
+    const result = await dbRun(query, params);
     return formatSuccessResponse({ affected_rows: result.changes });
   } catch (error: any) {
     throw new Error(`SQL Error: ${error.message}`);

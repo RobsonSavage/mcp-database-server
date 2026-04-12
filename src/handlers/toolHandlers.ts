@@ -12,6 +12,7 @@ import {
   setStickyConnection,
   getStickyConnection,
   getRegistry,
+  getDbType,
 } from '../db/index.js';
 
 /**
@@ -49,7 +50,14 @@ export function handleListTools() {
       description: "Execute SELECT queries to read data from the database",
       inputSchema: {
         type: "object",
-        properties: extendProps({ query: { type: "string" } }),
+        properties: extendProps({
+          query: { type: "string" },
+          params: {
+            type: "array",
+            items: {},
+            description: "Optional array of parameter values for parameterized queries. Use ? placeholders in the query string.",
+          },
+        }),
         required: ["query"],
       },
     },
@@ -58,7 +66,14 @@ export function handleListTools() {
       description: "Execute INSERT, UPDATE, or DELETE queries",
       inputSchema: {
         type: "object",
-        properties: extendProps({ query: { type: "string" } }),
+        properties: extendProps({
+          query: { type: "string" },
+          params: {
+            type: "array",
+            items: {},
+            description: "Optional array of parameter values for parameterized queries. Use ? placeholders in the query string.",
+          },
+        }),
         required: ["query"],
       },
     },
@@ -121,24 +136,31 @@ export function handleListTools() {
         required: ["table_name"],
       },
     },
-    {
-      name: "append_insight",
-      description: "Add a business insight to the memo",
-      inputSchema: {
-        type: "object",
-        properties: extendProps({ insight: { type: "string" } }),
-        required: ["insight"],
-      },
-    },
-    {
-      name: "list_insights",
-      description: "List all business insights in the memo",
-      inputSchema: {
-        type: "object",
-        properties: extendProps({}),
-      },
-    },
   ];
+
+  // Insight tools use SQLite-only SQL (AUTOINCREMENT, sqlite_master)
+  const currentDbType = getDbType();
+  if (currentDbType === 'sqlite') {
+    tools.push(
+      {
+        name: "append_insight",
+        description: "Add a business insight to the memo",
+        inputSchema: {
+          type: "object",
+          properties: { insight: { type: "string" } },
+          required: ["insight"],
+        },
+      },
+      {
+        name: "list_insights",
+        description: "List all business insights in the memo",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      }
+    );
+  }
 
   if (multi) {
     tools.push(
@@ -154,13 +176,23 @@ export function handleListTools() {
         description:
           "Set the sticky connection (server/database/login) used by subsequent tool calls that do not " +
           "explicitly name a connection. Any subset of server, database, login may be provided — missing " +
-          "levels fall back to the registry defaults.",
+          "levels fall back to the registry defaults. Pass `reset: true` to clear the sticky selection " +
+          "and return to the registry default. Note: use_connection should be called and awaited before " +
+          "subsequent tool calls. Concurrent calls may see non-deterministic routing.",
         inputSchema: {
           type: "object",
           properties: {
             server: { type: "string", description: "Target server name. Optional — defaults via registry." },
             database: { type: "string", description: "Target database name. Optional — defaults via registry." },
             login: { type: "string", description: "Login name. Optional — defaults via registry." },
+            connectionTimeoutMs: {
+              type: "number",
+              description: "Connection timeout in milliseconds (e.g., 30000 for 30 seconds). Overrides the config-file value for this sticky session. Only affects newly created connection pools.",
+            },
+            reset: {
+              type: "boolean",
+              description: "If true, clear the sticky selection and return the current registry default. Other fields are ignored when reset is true.",
+            },
           },
         },
       }
@@ -192,28 +224,36 @@ export async function handleToolCall(name: string, args: any) {
     }
 
     if (name === "use_connection") {
+      const reset = args?.reset === true;
+      const timeoutMs = args?.connectionTimeoutMs != null ? Number(args.connectionTimeoutMs) : undefined;
       const resolved = setStickyConnection({
         server: args?.server,
         database: args?.database,
         login: args?.login,
+        connectionTimeoutMs: timeoutMs,
+        reset,
       });
       return formatSuccessResponse({
         success: true,
-        message: `Sticky connection set to ${resolved.serverName}/${resolved.databaseName}/${resolved.loginName}`,
+        message: reset
+          ? `Sticky connection cleared; default is ${resolved.serverName}/${resolved.databaseName}/${resolved.loginName}`
+          : `Sticky connection set to ${resolved.serverName}/${resolved.databaseName}/${resolved.loginName}`,
+        reset,
         server: resolved.serverName,
         database: resolved.databaseName,
         login: resolved.loginName,
         auth: resolved.trustedConnection ? 'windows' : 'sql',
+        connectionTimeoutMs: timeoutMs ?? resolved.connectionTimeoutMs,
       });
     }
 
     const dataToolCall = async () => {
       switch (name) {
         case "read_query":
-          return await readQuery(args.query);
+          return await readQuery(args.query, args.params);
 
         case "write_query":
-          return await writeQuery(args.query);
+          return await writeQuery(args.query, args.params);
 
         case "create_table":
           return await createTable(args.query);

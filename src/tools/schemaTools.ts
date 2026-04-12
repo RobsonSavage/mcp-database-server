@@ -1,4 +1,5 @@
 import { dbAll, dbExec, getListTablesQuery, getDescribeTableQuery } from '../db/index.js';
+import { assertSafeIdentifier } from '../db/adapter.js';
 import { formatSuccessResponse } from '../utils/formatUtils.js';
 
 /**
@@ -66,6 +67,7 @@ export async function dropTable(tableName: string, confirm: boolean) {
     }
     
     // Drop the table
+    assertSafeIdentifier(tableName, 'table name');
     await dbExec(`DROP TABLE "${tableName}"`);
     
     return formatSuccessResponse({ 
@@ -113,8 +115,8 @@ export async function describeTable(tableName: string) {
     }
     
     // Use adapter-specific query for describing tables
-    const descQuery = await getDescribeTableQuery(tableName);
-    const columns = await dbAll(descQuery);
+    const { query: descQuery, params: descParams } = await getDescribeTableQuery(tableName);
+    const columns = await dbAll(descQuery, descParams);
     
     return formatSuccessResponse(columns.map((col) => ({
       name: col.name,

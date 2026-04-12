@@ -5,7 +5,8 @@
  */
 export function convertToCSV(data: any[]): string {
   if (data.length === 0) return '';
-  
+  if (!data[0] || typeof data[0] !== 'object') return '';
+
   // Get headers
   const headers = Object.keys(data[0]);
   

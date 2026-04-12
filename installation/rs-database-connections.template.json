@@ -2,18 +2,20 @@
   "servers": {
     "RS-SQL01": {
       "trustServerCertificate": true,
+      "connectionTimeoutMs": 15000,
+      "multipleActiveResultSets": true,
       "databases": {
         "QMaster": {
           "default": true,
           "logins": {
             "readonly": {
               "default": true,
-              "user": "readonly",
-              "password": "REPLACE_WITH_PASSWORD"
+              "user": "${env:RS_SQL01_READONLY_USER}",
+              "password": "${env:RS_SQL01_READONLY_PASSWORD}"
             },
             "QMaster": {
-              "user": "QMaster",
-              "password": "REPLACE_WITH_PASSWORD"
+              "user": "${env:RS_SQL01_QMASTER_USER}",
+              "password": "${env:RS_SQL01_QMASTER_PASSWORD}"
             }
           }
         },
@@ -21,12 +23,12 @@
           "logins": {
             "readonly": {
               "default": true,
-              "user": "readonly",
-              "password": "REPLACE_WITH_PASSWORD"
+              "user": "${env:RS_SQL01_READONLY_USER}",
+              "password": "${env:RS_SQL01_READONLY_PASSWORD}"
             },
             "BugTracker": {
-              "user": "BugTracker",
-              "password": "REPLACE_WITH_PASSWORD"
+              "user": "${env:RS_SQL01_BUGTRACKER_USER}",
+              "password": "${env:RS_SQL01_BUGTRACKER_PASSWORD}"
             }
           }
         }
@@ -35,6 +37,9 @@
     "localhost": {
       "default": true,
       "trustServerCertificate": true,
+      "connectionTimeoutMs": 15000,
+      "multipleActiveResultSets": true,
+      "driver": "ODBC Driver 18 for SQL Server",
       "databases": {
         "x26QMaster": {
           "logins": {

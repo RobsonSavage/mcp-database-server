@@ -10,6 +10,7 @@ import { readFileSync } from 'fs';
  *       "default"?: true,
  *       "trustServerCertificate"?: boolean,
  *       "port"?: number,
+ *       "connectionTimeoutMs"?: number,   // milliseconds, default 15000
  *       "options"?: object,
  *       "databases": {
  *         "<database-name>": {
@@ -22,6 +23,7 @@ import { readFileSync } from 'fs';
  *               "trustedConnection"?: boolean,
  *               "trustServerCertificate"?: boolean,
  *               "port"?: number,
+ *               "connectionTimeoutMs"?: number,   // milliseconds, overrides server-level
  *               "options"?: object
  *             }
  *           }
@@ -33,6 +35,12 @@ import { readFileSync } from 'fs';
  *
  * Defaults apply independently at each level (server, database, login).
  * Exactly one `default: true` is required per level that has more than one sibling.
+ *
+ * Env-var indirection:
+ *   `user` and `password` may be either a literal string or a reference of the form
+ *   `${env:VAR_NAME}`. References are resolved lazily from `process.env` when a
+ *   connection is actually opened, so the registry file never has to contain
+ *   plaintext credentials. Missing/empty env vars throw at resolve() time.
  */
 
 export interface LoginConfig {
@@ -41,7 +49,13 @@ export interface LoginConfig {
   password?: string;
   trustedConnection?: boolean;
   trustServerCertificate?: boolean;
+  /** Enable Multiple Active Result Sets. Overrides server-level value. */
+  multipleActiveResultSets?: boolean;
+  /** ODBC driver name for msnodesqlv8 (e.g. "ODBC Driver 18 for SQL Server"). Overrides server-level value. */
+  driver?: string;
   port?: number;
+  /** Connection timeout in milliseconds. Overrides server-level value. */
+  connectionTimeoutMs?: number;
   options?: Record<string, unknown>;
 }
 
@@ -53,7 +67,13 @@ export interface DatabaseConfig {
 export interface ServerConfig {
   default?: boolean;
   trustServerCertificate?: boolean;
+  /** Enable Multiple Active Result Sets. Applied to all logins unless overridden. Default: true. */
+  multipleActiveResultSets?: boolean;
+  /** ODBC driver name for msnodesqlv8 Windows auth. Applied to all logins unless overridden. */
+  driver?: string;
   port?: number;
+  /** Connection timeout in milliseconds. Applied to all logins unless overridden. Default: 15000. */
+  connectionTimeoutMs?: number;
   options?: Record<string, unknown>;
   databases: Record<string, DatabaseConfig>;
 }
@@ -72,9 +92,14 @@ export interface ResolvedConnection {
   server: string;
   database: string;
   port: number;
+  /** Connection timeout in milliseconds. */
+  connectionTimeoutMs: number;
   trustServerCertificate: boolean;
+  multipleActiveResultSets: boolean;
   options?: Record<string, unknown>;
   trustedConnection: boolean;
+  /** ODBC driver name for msnodesqlv8 (e.g. "ODBC Driver 18 for SQL Server"). */
+  driver?: string;
   user?: string;
   password?: string;
 }
@@ -128,6 +153,15 @@ export class ConnectionRegistry {
       );
     }
 
+    const fieldPrefix =
+      `servers['${serverEntry.name}'].databases['${dbEntry.name}'].logins['${loginEntry.name}']`;
+    const resolvedUser = trustedConnection
+      ? undefined
+      : resolveEnvRef(login.user, { strict: true, fieldLabel: `${fieldPrefix}.user` });
+    const resolvedPassword = trustedConnection
+      ? undefined
+      : resolveEnvRef(login.password, { strict: true, fieldLabel: `${fieldPrefix}.password` });
+
     return {
       serverName: serverEntry.name,
       databaseName: dbEntry.name,
@@ -136,11 +170,14 @@ export class ConnectionRegistry {
       server: serverEntry.name,
       database: dbEntry.name,
       port: login.port ?? server.port ?? 1433,
-      trustServerCertificate: login.trustServerCertificate ?? server.trustServerCertificate ?? true,
+      connectionTimeoutMs: login.connectionTimeoutMs ?? server.connectionTimeoutMs ?? 15000,
+      trustServerCertificate: login.trustServerCertificate ?? server.trustServerCertificate ?? false,
+      multipleActiveResultSets: login.multipleActiveResultSets ?? server.multipleActiveResultSets ?? true,
       options: { ...(server.options ?? {}), ...(login.options ?? {}) },
       trustedConnection,
-      user: trustedConnection ? undefined : login.user,
-      password: trustedConnection ? undefined : login.password,
+      driver: login.driver ?? server.driver,
+      user: resolvedUser,
+      password: resolvedPassword,
     };
   }
 
@@ -172,7 +209,9 @@ export class ConnectionRegistry {
             name: loginName,
             default: login.default === true,
             auth: login.trustedConnection ? ('windows' as const) : ('sql' as const),
-            user: login.trustedConnection ? undefined : login.user,
+            user: login.trustedConnection
+              ? undefined
+              : resolveEnvRef(login.user, { strict: false }),
           })),
         })),
       });
@@ -307,6 +346,34 @@ function pickLogin(
     return { name: explicit, value };
   }
   return pickDefault(logins, `login on '${serverName}/${databaseName}'`);
+}
+
+const ENV_REF_PATTERN = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+/**
+ * Resolve a `${env:VAR_NAME}` reference against `process.env`. Literal values
+ * (anything not matching the pattern) are returned unchanged. In strict mode a
+ * missing/empty env var throws; otherwise the original literal is returned so
+ * diagnostic output (e.g. list_connections) can fall back gracefully.
+ */
+function resolveEnvRef(
+  value: string | undefined,
+  options: { strict: boolean; fieldLabel?: string }
+): string | undefined {
+  if (value == null) return undefined;
+  const match = ENV_REF_PATTERN.exec(value);
+  if (!match) return value;
+  const envName = match[1];
+  const envValue = process.env[envName];
+  if (envValue == null || envValue === '') {
+    if (options.strict) {
+      throw new Error(
+        `${options.fieldLabel ?? 'field'} references env var '${envName}' but it is not set or is empty.`
+      );
+    }
+    return '<env var not set>';
+  }
+  return envValue;
 }
 
 function pickDefault<T extends { default?: boolean }>(

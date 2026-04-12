@@ -1,5 +1,5 @@
 import sqlite3 from "sqlite3";
-import { DbAdapter } from "./adapter.js";
+import { DbAdapter, assertSafeIdentifier } from "./adapter.js";
 
 /**
  * SQLite database adapter implementation
@@ -139,7 +139,10 @@ export class SqliteAdapter implements DbAdapter {
    * Get database-specific query for describing a table
    * @param tableName Table name
    */
-  getDescribeTableQuery(tableName: string): string {
-    return `PRAGMA table_info(${tableName})`;
+  getDescribeTableQuery(tableName: string): { query: string; params: any[] } {
+    // PRAGMA does not support ? parameters — identifier must be interpolated.
+    // Strict safelist is the defense.
+    assertSafeIdentifier(tableName, 'table name');
+    return { query: `PRAGMA table_info(${tableName})`, params: [] };
   }
 } 

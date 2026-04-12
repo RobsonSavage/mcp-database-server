@@ -44,10 +44,26 @@ export interface DbAdapter {
   getListTablesQuery(): string;
 
   /**
-   * Get database-specific query for describing a table
-   * @param tableName Table name
+   * Get database-specific query for describing a table.
+   * Returns a parameterized query where possible. For identifier-position
+   * contexts (SQLite PRAGMA, MySQL DESCRIBE) the tableName is validated
+   * against a strict safelist and interpolated; params will be empty in
+   * that case.
+   * @param tableName Table name (must already be validated by caller)
    */
-  getDescribeTableQuery(tableName: string): string;
+  getDescribeTableQuery(tableName: string): { query: string; params: any[] };
+}
+
+/**
+ * Strict identifier safelist for SQL table/column names.
+ * Matches: letter/underscore followed by letters, digits, underscores.
+ * Rejects anything that could contain quotes, backticks, brackets, semicolons, etc.
+ */
+export function assertSafeIdentifier(name: string, label: string = 'identifier'): string {
+  if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(name)) {
+    throw new Error(`Invalid ${label}: '${name}'. Must be a valid identifier (letters, digits, underscores; optional schema.table with one dot).`);
+  }
+  return name;
 }
 
 // Import adapters using dynamic imports
