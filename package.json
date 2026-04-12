@@ -1,6 +1,6 @@
 {
     "name": "@robsonsavage/database-server",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "description": "MCP server for SQLite, SQL Server, PostgreSQL and MySQL. Fork of @executeautomation/database-server with Windows integrated auth and multi-connection routing.",
     "license": "MIT",
     "author": "RobsonSavage (fork) — original by ExecuteAutomation, Ltd",

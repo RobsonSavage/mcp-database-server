@@ -8,7 +8,7 @@ on a new Windows machine.
 
 | File | Purpose |
 |---|---|
-| `robsonsavage-database-server-2.0.2.tgz` | npm tarball built via `npm pack` — installs the `rs-database-server` global binary |
+| `robsonsavage-database-server-2.0.3.tgz` | npm tarball built via `npm pack` — installs the `rs-database-server` global binary |
 | `rs-database-connections.template.json` | Sanitized connection registry template — populate with real values on the target machine |
 | `INSTALL.md` | This file |
 
@@ -27,7 +27,7 @@ bash-style `$USERPROFILE`; adjust if your shell expands variables differently).
 ### 1. Install the CLI globally from the tarball
 
 ```bash
-npm install -g ./robsonsavage-database-server-2.0.2.tgz
+npm install -g ./robsonsavage-database-server-2.0.3.tgz
 ```
 
 This installs the `rs-database-server` (and `ea-database-server`) binaries to

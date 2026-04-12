@@ -162,12 +162,16 @@ export class SqlServerAdapter implements DbAdapter {
   }
 
   async all(query: string, params: any[] = []): Promise<any[]> {
-    if (!this.pool) {
+    if (!this.pool || !this.sql) {
       throw new Error("Database not initialized");
     }
 
     try {
-      const request = this.pool.request();
+      // Use this.sql.Request explicitly — pool.request() defers to a global
+      // shared.driver singleton that gets contaminated when msnodesqlv8 is
+      // imported for Windows-auth connections, causing Tedious pools to
+      // receive msnodesqlv8 Request objects whose queryRaw calls fail.
+      const request = new this.sql.Request(this.pool);
       const preparedQuery = (params && params.length > 0)
         ? (() => {
             params.forEach((param, index) => {
@@ -189,7 +193,7 @@ export class SqlServerAdapter implements DbAdapter {
     }
 
     try {
-      const request = this.pool.request();
+      const request = new this.sql.Request(this.pool);
       const preparedQuery = (params && params.length > 0)
         ? (() => {
             params.forEach((param, index) => {
@@ -219,12 +223,12 @@ export class SqlServerAdapter implements DbAdapter {
   }
 
   async exec(query: string): Promise<void> {
-    if (!this.pool) {
+    if (!this.pool || !this.sql) {
       throw new Error("Database not initialized");
     }
 
     try {
-      const request = this.pool.request();
+      const request = new this.sql.Request(this.pool);
       await request.batch(query);
     } catch (err) {
       throw new Error(`SQL Server batch error: ${(err as Error).message}`);
