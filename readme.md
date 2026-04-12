@@ -23,7 +23,7 @@ claude mcp add rs-database-server --scope user -- \
   rs-database-server --sqlserver --config "$HOME/.claude/rs-database-connections.json"
 ```
 
-### Register with Claude Desktop
+### Register with Claude Desktop/CLI
 
 Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json` on Windows, `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
@@ -31,6 +31,7 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
 {
   "mcpServers": {
     "rs-database-server": {
+      "type": "stdio",
       "command": "rs-database-server",
       "args": [
         "--sqlserver",
