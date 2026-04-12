@@ -58,8 +58,8 @@ export class SqlServerAdapter implements DbAdapter {
     const mars = connectionInfo.multipleActiveResultSets ?? true;
 
     const port = connectionInfo.port ?? 1433;
-    // mssql connectionTimeout is in seconds; config uses milliseconds for Node consistency.
-    const connectionTimeoutSec = Math.ceil((connectionInfo.connectionTimeoutMs ?? 15000) / 1000);
+    // mssql connectionTimeout is in milliseconds (default 15000).
+    const connectionTimeoutMs = connectionInfo.connectionTimeoutMs ?? 15000;
 
     if (this.trustedConnection) {
       // msnodesqlv8 shape — no user/password, trustedConnection lives under options.
@@ -69,7 +69,7 @@ export class SqlServerAdapter implements DbAdapter {
         server: connectionInfo.server,
         database: connectionInfo.database,
         port,
-        connectionTimeout: connectionTimeoutSec,
+        connectionTimeout: connectionTimeoutMs,
         // Override the ODBC driver in the connection string for msnodesqlv8.
         // mssql defaults to "SQL Server Native Client 11.0" on Windows, which
         // is rarely installed. Replace it with a modern ODBC driver.
@@ -101,7 +101,7 @@ export class SqlServerAdapter implements DbAdapter {
         user: connectionInfo.user,
         password: connectionInfo.password,
         port,
-        connectionTimeout: connectionTimeoutSec,
+        connectionTimeout: connectionTimeoutMs,
         options: baseOptions as sql.config['options'],
       };
       // Note: MARS is an ODBC/msnodesqlv8 concept. Tedious handles concurrency
