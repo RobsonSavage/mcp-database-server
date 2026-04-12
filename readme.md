@@ -8,7 +8,7 @@
 
 Supports **SQLite**, **SQL Server**, **PostgreSQL**, and **MySQL**.
 
-## Quick start
+## Quick start (SQL Server)
 
 ### Install globally
 
