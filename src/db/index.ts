@@ -132,6 +132,23 @@ export function setStickyConnection(
   return resolved;
 }
 
+/**
+ * Resolve the current (override -> sticky -> default) connection without opening
+ * a pool. Tools that need to consult connection-level flags (e.g. allowDdl)
+ * before dispatching a query call this inside `runWithOverride`.
+ */
+export function getResolvedConnection(): ResolvedConnection {
+  if (!registry) {
+    throw new Error("getResolvedConnection is only available in --config mode.");
+  }
+  const override = callContext.getStore() ?? {};
+  return registry.resolve(
+    override.server ?? sticky.server,
+    override.database ?? sticky.database,
+    override.login ?? sticky.login,
+  );
+}
+
 export function getStickyConnection(): ResolvedConnection | null {
   if (!registry) return null;
   return registry.resolve(sticky.server, sticky.database, sticky.login);

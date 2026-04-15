@@ -212,8 +212,16 @@ Requires AWS credentials via `aws configure`, environment variables, or IAM role
 | `list_tables` | List all tables in the database |
 | `describe_table` | View schema information for a table |
 | `export_query` | Export results as CSV or JSON |
+| `execute_ddl` | Execute a single `CREATE`/`ALTER`/`DROP` statement for procedures, functions, views, triggers, indexes, etc. **Only registered when the server is started with `ALLOW_DDL=true`**, and in registry mode only runs against servers whose config has `"allowDdl": true`. Not intended for table DDL &mdash; use `create_table`/`alter_table`/`drop_table` for those. `GO` batch separators are not supported &mdash; send one statement per call. |
 
 In registry mode (`--config`), every tool gains three optional parameters: `server`, `database`, `login`. Missing levels fall through to the sticky connection (set by `use_connection`), then to registry defaults.
+
+### Enabling `execute_ddl`
+
+Two gates must both be satisfied:
+
+1. Launch the server with `ALLOW_DDL=true` in its environment. Without this the tool is not even registered.
+2. In registry mode, set `"allowDdl": true` on the server entry you want to permit. Servers without the flag reject DDL even when the env var is set &mdash; typical setup is `allowDdl: true` on `localhost` only, leaving shared/production servers locked.
 
 Two additional tools in registry mode:
 

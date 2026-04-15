@@ -39,6 +39,7 @@
       "trustServerCertificate": true,
       "connectionTimeoutMs": 15000,
       "multipleActiveResultSets": true,
+      "allowDdl": true,
       "driver": "ODBC Driver 18 for SQL Server",
       "databases": {
         "x26QMaster": {

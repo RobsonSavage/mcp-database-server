@@ -1,4 +1,4 @@
-import { dbAll, dbRun, dbExec } from '../db/index.js';
+import { dbAll, dbRun, dbExec, isMultiConnectionMode, getResolvedConnection } from '../db/index.js';
 import { formatErrorResponse, formatSuccessResponse, convertToCSV } from '../utils/formatUtils.js';
 
 /**
@@ -47,6 +47,42 @@ export async function writeQuery(query: string, params: any[] = []) {
     return formatSuccessResponse({ affected_rows: result.changes });
   } catch (error: any) {
     throw new Error(`SQL Error: ${error.message}`);
+  }
+}
+
+/**
+ * Execute a DDL statement (CREATE/ALTER/DROP PROCEDURE|FUNCTION|VIEW|TRIGGER|INDEX, etc.)
+ * Gated behind ALLOW_DDL=true env var. Intended for stored-proc maintenance where
+ * the structured schema tools are insufficient.
+ */
+export async function executeDdl(query: string) {
+  try {
+    if (process.env.ALLOW_DDL !== 'true') {
+      throw new Error("execute_ddl is disabled. Set ALLOW_DDL=true in the server environment to enable.");
+    }
+
+    if (isMultiConnectionMode()) {
+      const resolved = getResolvedConnection();
+      if (!resolved.allowDdl) {
+        throw new Error(
+          `execute_ddl is not permitted on server '${resolved.serverName}'. ` +
+          `Set "allowDdl": true on that server entry in the connection config to enable.`
+        );
+      }
+    }
+
+    const trimmed = query.trim();
+    const stripped = trimmed.replace(/^\/\*[\s\S]*?\*\/\s*/g, '').replace(/^--[^\n]*\n/g, '');
+    const first = stripped.toLowerCase().split(/\s+/)[0];
+    const allowed = new Set(['create', 'alter', 'drop']);
+    if (!allowed.has(first)) {
+      throw new Error("execute_ddl only accepts CREATE, ALTER, or DROP statements. Use write_query for DML.");
+    }
+
+    await dbExec(query);
+    return formatSuccessResponse({ success: true, message: `DDL executed: ${first.toUpperCase()}` });
+  } catch (error: any) {
+    throw new Error(`DDL Error: ${error.message}`);
   }
 }
 

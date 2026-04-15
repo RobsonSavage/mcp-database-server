@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
  *       "trustServerCertificate"?: boolean,
  *       "port"?: number,
  *       "connectionTimeoutMs"?: number,   // milliseconds, default 15000
+ *       "allowDdl"?: boolean,             // permits execute_ddl against this server; default false
  *       "options"?: object,
  *       "databases": {
  *         "<database-name>": {
@@ -74,6 +75,8 @@ export interface ServerConfig {
   port?: number;
   /** Connection timeout in milliseconds. Applied to all logins unless overridden. Default: 15000. */
   connectionTimeoutMs?: number;
+  /** Allow execute_ddl tool to run against this server. Default: false. Only honored when ALLOW_DDL=true is also set in the process env. */
+  allowDdl?: boolean;
   options?: Record<string, unknown>;
   databases: Record<string, DatabaseConfig>;
 }
@@ -96,6 +99,7 @@ export interface ResolvedConnection {
   connectionTimeoutMs: number;
   trustServerCertificate: boolean;
   multipleActiveResultSets: boolean;
+  allowDdl: boolean;
   options?: Record<string, unknown>;
   trustedConnection: boolean;
   /** ODBC driver name for msnodesqlv8 (e.g. "ODBC Driver 18 for SQL Server"). */
@@ -173,6 +177,7 @@ export class ConnectionRegistry {
       connectionTimeoutMs: login.connectionTimeoutMs ?? server.connectionTimeoutMs ?? 15000,
       trustServerCertificate: login.trustServerCertificate ?? server.trustServerCertificate ?? false,
       multipleActiveResultSets: login.multipleActiveResultSets ?? server.multipleActiveResultSets ?? true,
+      allowDdl: server.allowDdl === true,
       options: { ...(server.options ?? {}), ...(login.options ?? {}) },
       trustedConnection,
       driver: login.driver ?? server.driver,

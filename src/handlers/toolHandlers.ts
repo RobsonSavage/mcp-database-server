@@ -1,7 +1,7 @@
 import { formatErrorResponse, formatSuccessResponse } from '../utils/formatUtils.js';
 
 // Import all tool implementations
-import { readQuery, writeQuery, exportQuery } from '../tools/queryTools.js';
+import { readQuery, writeQuery, exportQuery, executeDdl } from '../tools/queryTools.js';
 import { createTable, alterTable, dropTable, listTables, describeTable } from '../tools/schemaTools.js';
 import { appendInsight, listInsights } from '../tools/insightTools.js';
 
@@ -138,6 +138,21 @@ export function handleListTools() {
     },
   ];
 
+  if (process.env.ALLOW_DDL === 'true') {
+    tools.push({
+      name: "execute_ddl",
+      description:
+        "Execute a DDL statement (CREATE/ALTER/DROP for procedures, functions, views, triggers, indexes, etc.). " +
+        "Only available when the server is started with ALLOW_DDL=true. Accepts a single statement starting " +
+        "with CREATE, ALTER, or DROP. Use write_query for DML and the dedicated table tools for table DDL.",
+      inputSchema: {
+        type: "object",
+        properties: extendProps({ query: { type: "string" } }),
+        required: ["query"],
+      },
+    });
+  }
+
   // Insight tools use SQLite-only SQL (AUTOINCREMENT, sqlite_master)
   const currentDbType = getDbType();
   if (currentDbType === 'sqlite') {
@@ -254,6 +269,9 @@ export async function handleToolCall(name: string, args: any) {
 
         case "write_query":
           return await writeQuery(args.query, args.params);
+
+        case "execute_ddl":
+          return await executeDdl(args.query);
 
         case "create_table":
           return await createTable(args.query);
