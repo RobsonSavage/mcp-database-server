@@ -1,12 +1,19 @@
 import { dbAll, dbRun, dbExec, isMultiConnectionMode, getResolvedConnection } from '../db/index.js';
-import { formatErrorResponse, formatSuccessResponse, convertToCSV } from '../utils/formatUtils.js';
+import { formatErrorResponse, formatSuccessResponse, formatToonResponse, convertToCSV } from '../utils/formatUtils.js';
+
+export type ReadQueryFormat = "json" | "toon";
 
 /**
  * Execute a read-only SQL query
  * @param query SQL query to execute
+ * @param params Parameter values for parameterized queries
+ * @param format Output encoding for the result set. "toon" (default, v3+) emits
+ *               Token-Oriented Object Notation — significantly fewer LLM tokens
+ *               for uniform row arrays. Pass "json" for the legacy pretty-printed
+ *               JSON shape.
  * @returns Query results
  */
-export async function readQuery(query: string, params: any[] = []) {
+export async function readQuery(query: string, params: any[] = [], format: ReadQueryFormat = "toon") {
   try {
     const trimmed = query.trim();
     // Strip leading block comments before checking the query type
@@ -20,7 +27,8 @@ export async function readQuery(query: string, params: any[] = []) {
     }
 
     const result = await dbAll(query, params);
-    return formatSuccessResponse(result);
+    if (format === "json") return formatSuccessResponse(result);
+    return formatToonResponse(result);
   } catch (error: any) {
     throw new Error(`SQL Error: ${error.message}`);
   }
@@ -87,9 +95,9 @@ export async function executeDdl(query: string) {
 }
 
 /**
- * Export query results to CSV or JSON format
+ * Export query results to CSV, JSON, or TOON format
  * @param query SQL query to execute
- * @param format Output format (csv or json)
+ * @param format Output format (csv, json, or toon)
  * @returns Formatted query results
  */
 export async function exportQuery(query: string, format: string) {
@@ -99,22 +107,24 @@ export async function exportQuery(query: string, format: string) {
     }
 
     const result = await dbAll(query);
-    
+
     if (format === "csv") {
       const csvData = convertToCSV(result);
       return {
-        content: [{ 
-          type: "text", 
+        content: [{
+          type: "text",
           text: csvData
         }],
         isError: false,
       };
     } else if (format === "json") {
       return formatSuccessResponse(result);
+    } else if (format === "toon") {
+      return formatToonResponse(result);
     } else {
-      throw new Error("Unsupported export format. Use 'csv' or 'json'");
+      throw new Error("Unsupported export format. Use 'csv', 'json', or 'toon'");
     }
   } catch (error: any) {
     throw new Error(`Export Error: ${error.message}`);
   }
-} 
+}

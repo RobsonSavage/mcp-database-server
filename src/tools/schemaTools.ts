@@ -1,6 +1,8 @@
 import { dbAll, dbExec, getListTablesQuery, getDescribeTableQuery } from '../db/index.js';
 import { assertSafeIdentifier } from '../db/adapter.js';
-import { formatSuccessResponse } from '../utils/formatUtils.js';
+import { formatSuccessResponse, formatToonResponse } from '../utils/formatUtils.js';
+
+export type SchemaFormat = "json" | "toon";
 
 /**
  * Create a new table in the database
@@ -81,14 +83,18 @@ export async function dropTable(tableName: string, confirm: boolean) {
 
 /**
  * List all tables in the database
+ * @param format Output encoding. "toon" (default, v3+) emits Token-Oriented Object
+ *               Notation; pass "json" for the legacy pretty-printed JSON shape.
  * @returns Array of table names
  */
-export async function listTables() {
+export async function listTables(format: SchemaFormat = "toon") {
   try {
     // Use adapter-specific query for listing tables
     const query = await getListTablesQuery();
     const tables = await dbAll(query);
-    return formatSuccessResponse(tables.map((t) => t.name));
+    const names = tables.map((t) => t.name);
+    if (format === "json") return formatSuccessResponse(names);
+    return formatToonResponse(names);
   } catch (error: any) {
     throw new Error(`Error listing tables: ${error.message}`);
   }
@@ -97,9 +103,11 @@ export async function listTables() {
 /**
  * Get schema information for a specific table
  * @param tableName Name of the table to describe
+ * @param format Output encoding. "toon" (default, v3+) emits Token-Oriented Object
+ *               Notation; pass "json" for the legacy pretty-printed JSON shape.
  * @returns Column definitions for the table
  */
-export async function describeTable(tableName: string) {
+export async function describeTable(tableName: string, format: SchemaFormat = "toon") {
   try {
     if (!tableName) {
       throw new Error("Table name is required");
@@ -109,23 +117,26 @@ export async function describeTable(tableName: string) {
     const query = await getListTablesQuery();
     const tables = await dbAll(query);
     const tableNames = tables.map(t => t.name);
-    
+
     if (!tableNames.includes(tableName)) {
       throw new Error(`Table '${tableName}' does not exist`);
     }
-    
+
     // Use adapter-specific query for describing tables
     const { query: descQuery, params: descParams } = await getDescribeTableQuery(tableName);
     const columns = await dbAll(descQuery, descParams);
-    
-    return formatSuccessResponse(columns.map((col) => ({
+
+    const shaped = columns.map((col) => ({
       name: col.name,
       type: col.type,
       notnull: !!col.notnull,
       default_value: col.dflt_value,
-      primary_key: !!col.pk
-    })));
+      primary_key: !!col.pk,
+    }));
+
+    if (format === "json") return formatSuccessResponse(shaped);
+    return formatToonResponse(shaped);
   } catch (error: any) {
     throw new Error(`Error describing table: ${error.message}`);
   }
-} 
+}

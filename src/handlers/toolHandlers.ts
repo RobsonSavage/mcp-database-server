@@ -57,6 +57,11 @@ export function handleListTools() {
             items: {},
             description: "Optional array of parameter values for parameterized queries. Use ? placeholders in the query string.",
           },
+          format: {
+            type: "string",
+            enum: ["json", "toon"],
+            description: "(optional) Output encoding for the result set. 'toon' (default, v3+) emits Token-Oriented Object Notation — significantly fewer tokens for uniform row arrays, lossless w.r.t. JSON. Pass 'json' for the legacy pretty-printed JSON shape.",
+          },
         }),
         required: ["query"],
       },
@@ -109,12 +114,12 @@ export function handleListTools() {
     },
     {
       name: "export_query",
-      description: "Export query results to various formats (CSV, JSON)",
+      description: "Export query results to various formats (CSV, JSON, or TOON)",
       inputSchema: {
         type: "object",
         properties: extendProps({
           query: { type: "string" },
-          format: { type: "string", enum: ["csv", "json"] },
+          format: { type: "string", enum: ["csv", "json", "toon"] },
         }),
         required: ["query", "format"],
       },
@@ -124,7 +129,13 @@ export function handleListTools() {
       description: "Get a list of all tables in the database",
       inputSchema: {
         type: "object",
-        properties: extendProps({}),
+        properties: extendProps({
+          format: {
+            type: "string",
+            enum: ["json", "toon"],
+            description: "(optional) Output encoding. 'toon' (default) emits Token-Oriented Object Notation for fewer LLM tokens. Pass 'json' to opt back into the legacy pretty-printed JSON shape.",
+          },
+        }),
       },
     },
     {
@@ -132,7 +143,14 @@ export function handleListTools() {
       description: "View schema information for a specific table",
       inputSchema: {
         type: "object",
-        properties: extendProps({ table_name: { type: "string" } }),
+        properties: extendProps({
+          table_name: { type: "string" },
+          format: {
+            type: "string",
+            enum: ["json", "toon"],
+            description: "(optional) Output encoding. 'toon' (default) emits Token-Oriented Object Notation for fewer LLM tokens. Pass 'json' to opt back into the legacy pretty-printed JSON shape.",
+          },
+        }),
         required: ["table_name"],
       },
     },
@@ -265,7 +283,7 @@ export async function handleToolCall(name: string, args: any) {
     const dataToolCall = async () => {
       switch (name) {
         case "read_query":
-          return await readQuery(args.query, args.params);
+          return await readQuery(args.query, args.params, args.format);
 
         case "write_query":
           return await writeQuery(args.query, args.params);
@@ -286,10 +304,10 @@ export async function handleToolCall(name: string, args: any) {
           return await exportQuery(args.query, args.format);
 
         case "list_tables":
-          return await listTables();
+          return await listTables(args.format);
 
         case "describe_table":
-          return await describeTable(args.table_name);
+          return await describeTable(args.table_name, args.format);
 
         case "append_insight":
           return await appendInsight(args.insight);
