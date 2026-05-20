@@ -1,7 +1,36 @@
-import { dbAll, dbRun, dbExec, isMultiConnectionMode, getResolvedConnection } from '../db/index.js';
+import { dbAll, dbRun, dbExec, isMultiConnectionMode, getResolvedConnection, getDbType } from '../db/index.js';
 import { formatErrorResponse, formatSuccessResponse, formatToonResponse, convertToCSV } from '../utils/formatUtils.js';
 
 export type ReadQueryFormat = "json" | "toon";
+
+/**
+ * Split a SQL Server script on `GO` batch separators (sqlcmd / SSMS convention).
+ * `GO` must be on its own line, may have leading/trailing whitespace, an optional
+ * integer repeat count (`GO 5` = run the preceding batch 5 times), and an optional
+ * trailing `-- comment`. Empty batches are dropped. Not string/comment-aware —
+ * matches the same approximation used by Flyway, DbUp, sqlcmd, and SSMS.
+ */
+function splitOnGo(query: string): { sql: string; repeat: number }[] {
+  const GO_RE = /^[ \t]*GO(?:[ \t]+(\d+))?[ \t]*(?:--.*)?$/i;
+  const lines = query.split(/\r?\n/);
+  const batches: { sql: string; repeat: number }[] = [];
+  let buf: string[] = [];
+  const flush = (repeat: number) => {
+    const sql = buf.join('\n').trim();
+    if (sql.length > 0) batches.push({ sql, repeat });
+    buf = [];
+  };
+  for (const line of lines) {
+    const m = line.match(GO_RE);
+    if (m) {
+      flush(m[1] ? Math.max(1, parseInt(m[1], 10)) : 1);
+    } else {
+      buf.push(line);
+    }
+  }
+  flush(1);
+  return batches;
+}
 
 /**
  * Execute a read-only SQL query
@@ -59,9 +88,16 @@ export async function writeQuery(query: string, params: any[] = []) {
 }
 
 /**
- * Execute a DDL statement (CREATE/ALTER/DROP PROCEDURE|FUNCTION|VIEW|TRIGGER|INDEX, etc.)
- * Gated behind ALLOW_DDL=true env var. Intended for stored-proc maintenance where
- * the structured schema tools are insufficient.
+ * Execute arbitrary DDL / schema-maintenance SQL. Supports CREATE/ALTER/DROP,
+ * EXEC sp_rename / sp_addextendedproperty / sp_helptext, semicolon-separated
+ * multi-statement batches, and (SQL Server only) GO-separated batches with
+ * optional `GO N` repeat counts — each GO-batch runs as a separate driver call,
+ * so a single execute_ddl can mix CREATE PROC ... GO EXEC sp_addextendedproperty
+ * ... etc. Batches are NOT wrapped in a single transaction (GO ends a batch by
+ * definition); a failure mid-script leaves earlier batches committed.
+ *
+ * Gated by two independent flags: ALLOW_DDL=true in the process env AND, in
+ * multi-connection mode, "allowDdl": true on the resolved server entry.
  */
 export async function executeDdl(query: string) {
   try {
@@ -79,16 +115,25 @@ export async function executeDdl(query: string) {
       }
     }
 
-    const trimmed = query.trim();
-    const stripped = trimmed.replace(/^\/\*[\s\S]*?\*\/\s*/g, '').replace(/^--[^\n]*\n/g, '');
-    const first = stripped.toLowerCase().split(/\s+/)[0];
-    const allowed = new Set(['create', 'alter', 'drop']);
-    if (!allowed.has(first)) {
-      throw new Error("execute_ddl only accepts CREATE, ALTER, or DROP statements. Use write_query for DML.");
+    // GO is a sqlcmd/SSMS client-side convention — only SQL Server uses it. For
+    // other engines pass through unchanged so a literal `GO` on its own line
+    // (legal identifier in other dialects) isn't misinterpreted as a separator.
+    const isSqlServer = getDbType() === 'sqlserver';
+    const batches = isSqlServer ? splitOnGo(query) : [{ sql: query, repeat: 1 }];
+
+    if (batches.length === 0) {
+      throw new Error("execute_ddl: query is empty after stripping GO separators.");
     }
 
-    await dbExec(query);
-    return formatSuccessResponse({ success: true, message: `DDL executed: ${first.toUpperCase()}` });
+    let executed = 0;
+    for (const b of batches) {
+      for (let i = 0; i < b.repeat; i++) {
+        await dbExec(b.sql);
+        executed++;
+      }
+    }
+    const batchWord = executed === 1 ? 'batch' : 'batches';
+    return formatSuccessResponse({ success: true, message: `DDL executed (${executed} ${batchWord})` });
   } catch (error: any) {
     throw new Error(`DDL Error: ${error.message}`);
   }

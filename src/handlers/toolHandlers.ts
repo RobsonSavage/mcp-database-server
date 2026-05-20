@@ -160,9 +160,13 @@ export function handleListTools() {
     tools.push({
       name: "execute_ddl",
       description:
-        "Execute a DDL statement (CREATE/ALTER/DROP for procedures, functions, views, triggers, indexes, etc.). " +
-        "Only available when the server is started with ALLOW_DDL=true. Accepts a single statement starting " +
-        "with CREATE, ALTER, or DROP. Use write_query for DML and the dedicated table tools for table DDL.",
+        "Execute arbitrary DDL / schema-maintenance SQL: CREATE/ALTER/DROP for procedures, functions, views, " +
+        "triggers, indexes, etc., plus EXEC sp_rename / sp_addextendedproperty / sp_helptext, semicolon- " +
+        "separated multi-statement batches, AND (SQL Server only) GO-separated batches with optional `GO N` " +
+        "repeat counts — each GO-batch runs as its own driver call, NOT wrapped in a shared transaction (a " +
+        "failure mid-script leaves earlier batches committed). Only available when the server is started with " +
+        "ALLOW_DDL=true and, in multi-connection mode, the resolved server has \"allowDdl\": true. Use " +
+        "write_query for DML parameterization.",
       inputSchema: {
         type: "object",
         properties: extendProps({ query: { type: "string" } }),

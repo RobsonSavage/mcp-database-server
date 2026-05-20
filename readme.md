@@ -212,7 +212,7 @@ Requires AWS credentials via `aws configure`, environment variables, or IAM role
 | `list_tables` | List all tables in the database |
 | `describe_table` | View schema information for a table |
 | `export_query` | Export results as CSV or JSON |
-| `execute_ddl` | Execute a single `CREATE`/`ALTER`/`DROP` statement for procedures, functions, views, triggers, indexes, etc. **Only registered when the server is started with `ALLOW_DDL=true`**, and in registry mode only runs against servers whose config has `"allowDdl": true`. Not intended for table DDL &mdash; use `create_table`/`alter_table`/`drop_table` for those. `GO` batch separators are not supported &mdash; send one statement per call. |
+| `execute_ddl` | Execute arbitrary DDL / schema-maintenance SQL &mdash; `CREATE`/`ALTER`/`DROP` for procedures, functions, views, triggers, indexes, etc., plus `EXEC sp_rename` / `sp_addextendedproperty` / `sp_helptext`, semicolon-separated multi-statement batches, and (SQL Server only) `GO`-separated batches with optional `GO N` repeat counts &mdash; each `GO`-batch runs as its own driver call, **not** wrapped in a shared transaction (a failure mid-script leaves earlier batches committed). **Only registered when the server is started with `ALLOW_DDL=true`**, and in registry mode only runs against servers whose config has `"allowDdl": true`. For table DDL, `create_table`/`alter_table`/`drop_table` are still available but `execute_ddl` will also accept them. |
 
 In registry mode (`--config`), every tool gains three optional parameters: `server`, `database`, `login`. Missing levels fall through to the sticky connection (set by `use_connection`), then to registry defaults.
 
