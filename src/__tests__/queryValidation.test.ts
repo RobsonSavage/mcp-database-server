@@ -1,33 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import { validateReadQuery, validateWriteQuery } from '../tools/queryTools.js';
 
 /**
- * Tests for the query validation logic in readQuery/writeQuery.
- * We test the validation rules directly by extracting the logic,
- * since the full functions depend on database connections.
+ * Tests for the shared query validation logic exercised by
+ * read_query / write_query / export_query. Imports the real validators so the
+ * tests can't drift from the implementation.
  */
-
-// Extract the readQuery validation logic (I9 fix)
-function validateReadQuery(query: string): void {
-  const trimmed = query.trim();
-  const stripped = trimmed.replace(/^\/\*[\s\S]*?\*\/\s*/g, '');
-  if (!stripped.toLowerCase().startsWith("select") && !stripped.toLowerCase().startsWith("with")) {
-    throw new Error("Only SELECT queries are allowed with read_query");
-  }
-  if (trimmed.includes(';')) {
-    throw new Error("Multiple statements are not allowed in read_query");
-  }
-}
-
-// Extract writeQuery validation logic
-function validateWriteQuery(query: string): void {
-  const lowerQuery = query.trim().toLowerCase();
-  if (lowerQuery.startsWith("select")) {
-    throw new Error("Use read_query for SELECT operations");
-  }
-  if (!(lowerQuery.startsWith("insert") || lowerQuery.startsWith("update") || lowerQuery.startsWith("delete"))) {
-    throw new Error("Only INSERT, UPDATE, or DELETE operations are allowed with write_query");
-  }
-}
 
 describe('readQuery validation', () => {
   it('accepts simple SELECT', () => {
@@ -46,6 +24,10 @@ describe('readQuery validation', () => {
     expect(() => validateReadQuery('/* comment */ SELECT 1')).not.toThrow();
   });
 
+  it('accepts SELECT with a single trailing semicolon', () => {
+    expect(() => validateReadQuery('SELECT * FROM users;')).not.toThrow();
+  });
+
   it('rejects non-SELECT queries', () => {
     expect(() => validateReadQuery('DELETE FROM users')).toThrow('Only SELECT');
   });
@@ -61,6 +43,10 @@ describe('readQuery validation', () => {
 
   it('rejects SELECT followed by semicolon and DROP', () => {
     expect(() => validateReadQuery('SELECT 1; DELETE FROM users')).toThrow('Multiple statements');
+  });
+
+  it('rejects piggyback even with a trailing semicolon', () => {
+    expect(() => validateReadQuery('SELECT 1; DROP TABLE users;')).toThrow('Multiple statements');
   });
 
   // Edge case: block comment hiding malicious query
@@ -92,5 +78,13 @@ describe('writeQuery validation', () => {
 
   it('rejects DROP TABLE', () => {
     expect(() => validateWriteQuery('DROP TABLE users')).toThrow('Only INSERT');
+  });
+
+  it('rejects multi-statement piggyback (DDL bypass via write_query)', () => {
+    expect(() => validateWriteQuery('UPDATE users SET x=1; DROP TABLE users')).toThrow('Multiple statements');
+  });
+
+  it('accepts UPDATE with a single trailing semicolon', () => {
+    expect(() => validateWriteQuery('UPDATE users SET name = \'x\';')).not.toThrow();
   });
 });

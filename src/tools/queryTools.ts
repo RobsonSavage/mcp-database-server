@@ -33,6 +33,59 @@ function splitOnGo(query: string): { sql: string; repeat: number }[] {
 }
 
 /**
+ * Strip a leading block comment and a single trailing `;`, then reject any
+ * remaining `;` to block multi-statement piggyback batches. Returns the
+ * normalized SQL to execute.
+ *
+ * NOT a read-only guarantee and NOT string/comment-aware: a `;` inside a string
+ * literal (e.g. `WHERE name = 'a;b'`) is a false positive, and data-modifying
+ * CTEs (`WITH x AS (DELETE ... RETURNING) SELECT ...` on PostgreSQL, or
+ * `WITH cte AS (...) DELETE FROM cte` on SQL Server) pass any leading-keyword
+ * check by construction. True read/write enforcement is the DB login's job. This
+ * guard's only jobs are routing the agent to the right tool and stopping batch
+ * piggyback — which is the one thing the SQL Server driver's batch execution
+ * does NOT block on its own (and which would otherwise bypass the execute_ddl gate).
+ */
+function assertSingleStatement(query: string, tool: string): string {
+  const stripped = query.trim().replace(/^\/\*[\s\S]*?\*\/\s*/g, '');
+  const body = stripped.replace(/;\s*$/, '');
+  if (body.includes(';')) {
+    throw new Error(`Multiple statements are not allowed in ${tool}`);
+  }
+  return body;
+}
+
+/**
+ * Validate a read-path query (read_query / export_query). Allows SELECT and CTE
+ * (WITH) heads. Returns the normalized SQL. `tool` only shapes the error text.
+ * Exported so tests exercise the real logic instead of a reimplementation.
+ */
+export function validateReadQuery(query: string, tool = "read_query"): string {
+  const sql = assertSingleStatement(query, tool);
+  const lower = sql.toLowerCase();
+  if (!lower.startsWith("select") && !lower.startsWith("with")) {
+    throw new Error(`Only SELECT queries are allowed with ${tool}`);
+  }
+  return sql;
+}
+
+/**
+ * Validate a write-path query (write_query). Allows INSERT/UPDATE/DELETE heads,
+ * rejects SELECT (routed to read_query). Returns the normalized SQL.
+ */
+export function validateWriteQuery(query: string): string {
+  const sql = assertSingleStatement(query, "write_query");
+  const lower = sql.toLowerCase();
+  if (lower.startsWith("select")) {
+    throw new Error("Use read_query for SELECT operations");
+  }
+  if (!(lower.startsWith("insert") || lower.startsWith("update") || lower.startsWith("delete"))) {
+    throw new Error("Only INSERT, UPDATE, or DELETE operations are allowed with write_query");
+  }
+  return sql;
+}
+
+/**
  * Execute a read-only SQL query
  * @param query SQL query to execute
  * @param params Parameter values for parameterized queries
@@ -44,18 +97,8 @@ function splitOnGo(query: string): { sql: string; repeat: number }[] {
  */
 export async function readQuery(query: string, params: any[] = [], format: ReadQueryFormat = "toon") {
   try {
-    const trimmed = query.trim();
-    // Strip leading block comments before checking the query type
-    const stripped = trimmed.replace(/^\/\*[\s\S]*?\*\/\s*/g, '');
-    if (!stripped.toLowerCase().startsWith("select") && !stripped.toLowerCase().startsWith("with")) {
-      throw new Error("Only SELECT queries are allowed with read_query");
-    }
-    // Reject multiple statements to prevent piggyback attacks
-    if (trimmed.includes(';')) {
-      throw new Error("Multiple statements are not allowed in read_query");
-    }
-
-    const result = await dbAll(query, params);
+    const sql = validateReadQuery(query);
+    const result = await dbAll(sql, params);
     if (format === "json") return formatSuccessResponse(result);
     return formatToonResponse(result);
   } catch (error: any) {
@@ -70,17 +113,8 @@ export async function readQuery(query: string, params: any[] = [], format: ReadQ
  */
 export async function writeQuery(query: string, params: any[] = []) {
   try {
-    const lowerQuery = query.trim().toLowerCase();
-
-    if (lowerQuery.startsWith("select")) {
-      throw new Error("Use read_query for SELECT operations");
-    }
-
-    if (!(lowerQuery.startsWith("insert") || lowerQuery.startsWith("update") || lowerQuery.startsWith("delete"))) {
-      throw new Error("Only INSERT, UPDATE, or DELETE operations are allowed with write_query");
-    }
-
-    const result = await dbRun(query, params);
+    const sql = validateWriteQuery(query);
+    const result = await dbRun(sql, params);
     return formatSuccessResponse({ affected_rows: result.changes });
   } catch (error: any) {
     throw new Error(`SQL Error: ${error.message}`);
@@ -147,11 +181,8 @@ export async function executeDdl(query: string) {
  */
 export async function exportQuery(query: string, format: string) {
   try {
-    if (!query.trim().toLowerCase().startsWith("select")) {
-      throw new Error("Only SELECT queries are allowed with export_query");
-    }
-
-    const result = await dbAll(query);
+    const sql = validateReadQuery(query, "export_query");
+    const result = await dbAll(sql);
 
     if (format === "csv") {
       const csvData = convertToCSV(result);
