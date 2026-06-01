@@ -55,14 +55,33 @@ const server = new Server(
 
 // Parse command line arguments
 const args = process.argv.slice(2);
+const USAGE = [
+  "Usage for SQLite: rs-database-server <database_file_path>",
+  "Usage for SQL Server: rs-database-server --sqlserver --server <server> --database <database> [--user <user> --password <password>]",
+  "Usage for SQL Server multi-connection: rs-database-server --sqlserver --config <path-to-connections.json>",
+  "Usage for PostgreSQL: rs-database-server --postgresql --host <host> --database <database> [--user <user> --password <password> --port <port>]",
+  "Usage for MySQL: rs-database-server --mysql --host <host> --database <database> [--user <user> --password <password> --port <port>]",
+  "Usage for MySQL with AWS IAM: rs-database-server --mysql --aws-iam-auth --host <rds-endpoint> --database <database> --user <aws-username> --aws-region <region>",
+];
+
+// --version / --help must short-circuit BEFORE any DB logic. Otherwise the flag
+// falls through to the SQLite default branch and is treated as a database file
+// path, which makes sqlite3 create a file literally named `--version`/`--help`.
+// These print to stdout (conventional) and exit 0; the server itself logs to
+// stderr to keep stdout clean for the MCP stdio transport.
+if (args.includes('--version')) {
+  console.log(pkg.version);
+  process.exit(0);
+}
+if (args.includes('--help')) {
+  console.log(`rs-database-server v${pkg.version}`);
+  for (const line of USAGE) console.log(line);
+  process.exit(0);
+}
+
 if (args.length === 0) {
   logger.error("Please provide database connection information");
-  logger.error("Usage for SQLite: node index.js <database_file_path>");
-  logger.error("Usage for SQL Server: node index.js --sqlserver --server <server> --database <database> [--user <user> --password <password>]");
-  logger.error("Usage for SQL Server multi-connection: node index.js --sqlserver --config <path-to-connections.json>");
-  logger.error("Usage for PostgreSQL: node index.js --postgresql --host <host> --database <database> [--user <user> --password <password> --port <port>]");
-  logger.error("Usage for MySQL: node index.js --mysql --host <host> --database <database> [--user <user> --password <password> --port <port>]");
-  logger.error("Usage for MySQL with AWS IAM: node index.js --mysql --aws-iam-auth --host <rds-endpoint> --database <database> --user <aws-username> --aws-region <region>");
+  for (const line of USAGE) logger.error(line);
   process.exit(1);
 }
 
