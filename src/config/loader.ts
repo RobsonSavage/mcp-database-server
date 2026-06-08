@@ -16,6 +16,7 @@ import { readFileSync } from 'fs';
  *       "databases": {
  *         "<database-name>": {
  *           "default"?: true,
+ *           "allowDdl"?: boolean,         // overrides the server-level allowDdl for this database
  *           "logins": {
  *             "<login-name>": {
  *               "default"?: true,
@@ -62,6 +63,8 @@ export interface LoginConfig {
 
 export interface DatabaseConfig {
   default?: boolean;
+  /** Allow execute_ddl against this database. Overrides the server-level allowDdl when set. */
+  allowDdl?: boolean;
   logins: Record<string, LoginConfig>;
 }
 
@@ -75,7 +78,7 @@ export interface ServerConfig {
   port?: number;
   /** Connection timeout in milliseconds. Applied to all logins unless overridden. Default: 15000. */
   connectionTimeoutMs?: number;
-  /** Allow execute_ddl tool to run against this server. Default: false. Only honored when ALLOW_DDL=true is also set in the process env. */
+  /** Allow execute_ddl tool to run against this server. Default: false. Overridden by a database-level allowDdl when that is set. Only honored when ALLOW_DDL=true is also set in the process env. */
   allowDdl?: boolean;
   options?: Record<string, unknown>;
   databases: Record<string, DatabaseConfig>;
@@ -177,7 +180,9 @@ export class ConnectionRegistry {
       connectionTimeoutMs: login.connectionTimeoutMs ?? server.connectionTimeoutMs ?? 15000,
       trustServerCertificate: login.trustServerCertificate ?? server.trustServerCertificate ?? false,
       multipleActiveResultSets: login.multipleActiveResultSets ?? server.multipleActiveResultSets ?? true,
-      allowDdl: server.allowDdl === true,
+      // Database-level allowDdl (when present) overrides the server-level flag;
+      // ?? preserves an explicit `false` at the database level.
+      allowDdl: (database.allowDdl ?? server.allowDdl) === true,
       options: { ...(server.options ?? {}), ...(login.options ?? {}) },
       trustedConnection,
       driver: login.driver ?? server.driver,

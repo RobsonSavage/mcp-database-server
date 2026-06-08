@@ -221,7 +221,7 @@ In registry mode (`--config`), every tool gains three optional parameters: `serv
 Two gates must both be satisfied:
 
 1. Launch the server with `ALLOW_DDL=true` in its environment. Without this the tool is not even registered.
-2. In registry mode, set `"allowDdl": true` on the server entry you want to permit. Servers without the flag reject DDL even when the env var is set &mdash; typical setup is `allowDdl: true` on `localhost` only, leaving shared/production servers locked.
+2. In registry mode, set `"allowDdl": true` on the server entry you want to permit. Servers without the flag reject DDL even when the env var is set &mdash; typical setup is `allowDdl: true` on `localhost` only, leaving shared/production servers locked. `allowDdl` may also be set on an individual database entry, where it overrides the server-level value (set it to `false` to lock a single database on an otherwise-permitted server, or `true` to open one database on an otherwise-locked server).
 
 Two additional tools in registry mode:
 

@@ -131,7 +131,8 @@ export async function writeQuery(query: string, params: any[] = []) {
  * definition); a failure mid-script leaves earlier batches committed.
  *
  * Gated by two independent flags: ALLOW_DDL=true in the process env AND, in
- * multi-connection mode, "allowDdl": true on the resolved server entry.
+ * multi-connection mode, "allowDdl": true on the resolved connection. The
+ * database-level "allowDdl" overrides the server-level one when set.
  */
 export async function executeDdl(query: string) {
   try {
@@ -143,8 +144,9 @@ export async function executeDdl(query: string) {
       const resolved = getResolvedConnection();
       if (!resolved.allowDdl) {
         throw new Error(
-          `execute_ddl is not permitted on server '${resolved.serverName}'. ` +
-          `Set "allowDdl": true on that server entry in the connection config to enable.`
+          `execute_ddl is not permitted on '${resolved.serverName}/${resolved.databaseName}'. ` +
+          `Set "allowDdl": true on that server entry (or override it on the database entry) ` +
+          `in the connection config to enable.`
         );
       }
     }
