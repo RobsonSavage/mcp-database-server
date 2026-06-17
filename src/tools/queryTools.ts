@@ -4,28 +4,90 @@ import { formatErrorResponse, formatSuccessResponse, formatToonResponse, convert
 export type ReadQueryFormat = "json" | "toon";
 
 /**
+ * Scan one physical line and advance the cross-line lexer state. Only block
+ * comments and single-quoted string literals carry across line boundaries in
+ * T-SQL, so those are the only flags that persist. Bracket (`[...]`) and
+ * double-quote (`"..."`) identifiers are tracked within the line so a `'`, `--`,
+ * or `/*` inside them doesn't flip state, but they are assumed to close on the
+ * same line (the common case) and are not carried over. Line comments (`--`) end
+ * at the newline by definition. Returns the updated state.
+ */
+function scanLineState(line: string, blockDepth: number, inString: boolean): { blockDepth: number; inString: boolean } {
+  let i = 0;
+  let inBracket = false;
+  let inQuotedId = false;
+  while (i < line.length) {
+    const c = line[i];
+    const next = line[i + 1];
+    if (blockDepth > 0) {
+      if (c === '*' && next === '/') { blockDepth--; i += 2; continue; }
+      if (c === '/' && next === '*') { blockDepth++; i += 2; continue; } // T-SQL nests
+      i++; continue;
+    }
+    if (inString) {
+      if (c === "'") {
+        if (next === "'") { i += 2; continue; } // '' escape
+        inString = false;
+      }
+      i++; continue;
+    }
+    if (inBracket) {
+      if (c === ']') {
+        if (next === ']') { i += 2; continue; } // ]] escape
+        inBracket = false;
+      }
+      i++; continue;
+    }
+    if (inQuotedId) {
+      if (c === '"') {
+        if (next === '"') { i += 2; continue; } // "" escape
+        inQuotedId = false;
+      }
+      i++; continue;
+    }
+    // clean state
+    if (c === '-' && next === '-') break;              // line comment to EOL
+    if (c === '/' && next === '*') { blockDepth++; i += 2; continue; }
+    if (c === "'") { inString = true; i++; continue; }
+    if (c === '[') { inBracket = true; i++; continue; }
+    if (c === '"') { inQuotedId = true; i++; continue; }
+    i++;
+  }
+  return { blockDepth, inString };
+}
+
+/**
  * Split a SQL Server script on `GO` batch separators (sqlcmd / SSMS convention).
  * `GO` must be on its own line, may have leading/trailing whitespace, an optional
  * integer repeat count (`GO 5` = run the preceding batch 5 times), and an optional
- * trailing `-- comment`. Empty batches are dropped. Not string/comment-aware —
- * matches the same approximation used by Flyway, DbUp, sqlcmd, and SSMS.
+ * trailing `-- comment`. Empty batches are dropped.
+ *
+ * Comment- and string-aware: a `GO` line that sits inside an open (possibly
+ * nested) block comment or a multi-line string literal is treated as content,
+ * not a separator. A line can only be a separator when the lexer state at the
+ * START of that line is clean.
  */
-function splitOnGo(query: string): { sql: string; repeat: number }[] {
+export function splitOnGo(query: string): { sql: string; repeat: number }[] {
   const GO_RE = /^[ \t]*GO(?:[ \t]+(\d+))?[ \t]*(?:--.*)?$/i;
   const lines = query.split(/\r?\n/);
   const batches: { sql: string; repeat: number }[] = [];
   let buf: string[] = [];
+  let blockDepth = 0;
+  let inString = false;
   const flush = (repeat: number) => {
     const sql = buf.join('\n').trim();
     if (sql.length > 0) batches.push({ sql, repeat });
     buf = [];
   };
   for (const line of lines) {
-    const m = line.match(GO_RE);
+    const clean = blockDepth === 0 && !inString;
+    const m = clean ? line.match(GO_RE) : null;
     if (m) {
+      // A clean GO line has no comment/string starters, so state is unchanged.
       flush(m[1] ? Math.max(1, parseInt(m[1], 10)) : 1);
     } else {
       buf.push(line);
+      ({ blockDepth, inString } = scanLineState(line, blockDepth, inString));
     }
   }
   flush(1);
