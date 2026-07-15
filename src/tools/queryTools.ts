@@ -109,7 +109,8 @@ export function splitOnGo(query: string): { sql: string; repeat: number }[] {
  * does NOT block on its own (and which would otherwise bypass the execute_ddl gate).
  */
 function assertSingleStatement(query: string, tool: string): string {
-  const stripped = query.trim().replace(/^\/\*[\s\S]*?\*\/\s*/g, '');
+  let stripped = query.trim().replace(/^\/\*[\s\S]*?\*\/\s*/g, '');
+  stripped = stripped.replace(/^(?:--[^\n]*\n)*/g, '').trim();
   const body = stripped.replace(/;\s*$/, '');
   if (body.includes(';')) {
     throw new Error(`Multiple statements are not allowed in ${tool}`);
