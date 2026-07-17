@@ -119,6 +119,78 @@ function assertSingleStatement(query: string, tool: string): string {
 }
 
 /**
+ * Split SQL statements on semicolons while preserving semicolons inside
+ * comments, string literals, and quoted identifiers.
+ */
+export function splitOnSemicolons(query: string): string[] {
+  const statements: string[] = [];
+  let buffer = '';
+  let blockDepth = 0;
+  let inString = false;
+  let inBracket = false;
+  let inQuotedId = false;
+  let inLineComment = false;
+
+  const flush = () => {
+    const statement = buffer.trim();
+    if (statement.length > 0) statements.push(statement);
+    buffer = '';
+  };
+
+  for (let i = 0; i < query.length; i++) {
+    const c = query[i];
+    const next = query[i + 1];
+
+    if (inLineComment) {
+      buffer += c;
+      if (c === '\n' || c === '\r') inLineComment = false;
+      continue;
+    }
+    if (blockDepth > 0) {
+      buffer += c;
+      if (c === '/' && next === '*') { buffer += next; blockDepth++; i++; }
+      else if (c === '*' && next === '/') { buffer += next; blockDepth--; i++; }
+      continue;
+    }
+    if (inString) {
+      buffer += c;
+      if (c === "'") {
+        if (next === "'") { buffer += next; i++; }
+        else inString = false;
+      }
+      continue;
+    }
+    if (inBracket) {
+      buffer += c;
+      if (c === ']') {
+        if (next === ']') { buffer += next; i++; }
+        else inBracket = false;
+      }
+      continue;
+    }
+    if (inQuotedId) {
+      buffer += c;
+      if (c === '"') {
+        if (next === '"') { buffer += next; i++; }
+        else inQuotedId = false;
+      }
+      continue;
+    }
+
+    if (c === '-' && next === '-') { buffer += c + next; inLineComment = true; i++; continue; }
+    if (c === '/' && next === '*') { buffer += c + next; blockDepth++; i++; continue; }
+    if (c === "'") { buffer += c; inString = true; continue; }
+    if (c === '[') { buffer += c; inBracket = true; continue; }
+    if (c === '"') { buffer += c; inQuotedId = true; continue; }
+    if (c === ';') { flush(); continue; }
+    buffer += c;
+  }
+
+  flush();
+  return statements;
+}
+
+/**
  * Validate a read-path query (read_query / export_query). Allows SELECT and CTE
  * (WITH) heads. Returns the normalized SQL. `tool` only shapes the error text.
  * Exported so tests exercise the real logic instead of a reimplementation.
@@ -133,19 +205,28 @@ export function validateReadQuery(query: string, tool = "read_query"): string {
 }
 
 /**
- * Validate a write-path query (write_query). Allows INSERT/UPDATE/DELETE heads,
- * rejects SELECT (routed to read_query). Returns the normalized SQL.
+ * Validate a write-path batch (write_query). Allows semicolon-separated
+ * INSERT/UPDATE/DELETE statements, rejects SELECT and DDL, and returns the SQL.
  */
 export function validateWriteQuery(query: string): string {
-  const sql = assertSingleStatement(query, "write_query");
-  const lower = sql.toLowerCase();
-  if (lower.startsWith("select")) {
-    throw new Error("Use read_query for SELECT operations");
+  const statements = splitOnSemicolons(query);
+  if (statements.length === 0) {
+    throw new Error("write_query: query is empty");
   }
-  if (!(lower.startsWith("insert") || lower.startsWith("update") || lower.startsWith("delete"))) {
-    throw new Error("Only INSERT, UPDATE, or DELETE operations are allowed with write_query");
+
+  for (const statement of statements) {
+    let sql = statement.trim().replace(/^\/\*[\s\S]*?\*\/\s*/g, '');
+    sql = sql.replace(/^(?:--[^\n]*\n)*/g, '').trim();
+    const lower = sql.toLowerCase();
+    if (lower.startsWith("select")) {
+      throw new Error("Use read_query for SELECT operations");
+    }
+    if (!(lower.startsWith("insert") || lower.startsWith("update") || lower.startsWith("delete"))) {
+      throw new Error("Only INSERT, UPDATE, or DELETE operations are allowed with write_query");
+    }
   }
-  return sql;
+
+  return query.trim();
 }
 
 /**
@@ -170,15 +251,36 @@ export async function readQuery(query: string, params: any[] = [], format: ReadQ
 }
 
 /**
- * Execute a data modification SQL query
+ * Execute one or more data modification statements. SQL Server GO batches are
+ * executed separately, matching sqlcmd/SSMS batch semantics. All batches are
+ * validated before the first write. Parameterized calls must use one batch.
  * @param query SQL query to execute
  * @returns Information about affected rows
  */
 export async function writeQuery(query: string, params: any[] = []) {
   try {
-    const sql = validateWriteQuery(query);
-    const result = await dbRun(sql, params);
-    return formatSuccessResponse({ affected_rows: result.changes });
+    const isSqlServer = getDbType() === 'sqlserver';
+    const batches = isSqlServer ? splitOnGo(query) : [{ sql: query, repeat: 1 }];
+    if (batches.length === 0) {
+      throw new Error("write_query: query is empty after stripping GO separators");
+    }
+    if (params.length > 0 && (batches.length > 1 || batches[0].repeat > 1)) {
+      throw new Error("Parameterized write_query calls cannot contain GO separators");
+    }
+
+    const validatedBatches = batches.map(batch => ({
+      sql: validateWriteQuery(batch.sql),
+      repeat: batch.repeat,
+    }));
+
+    let affectedRows = 0;
+    for (const batch of validatedBatches) {
+      for (let i = 0; i < batch.repeat; i++) {
+        const result = await dbRun(batch.sql, params);
+        affectedRows += result.changes;
+      }
+    }
+    return formatSuccessResponse({ affected_rows: affectedRows });
   } catch (error: any) {
     throw new Error(`SQL Error: ${error.message}`);
   }

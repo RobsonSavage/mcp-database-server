@@ -205,7 +205,7 @@ Requires AWS credentials via `aws configure`, environment variables, or IAM role
 | Tool | Description |
 |---|---|
 | `read_query` | Execute SELECT queries |
-| `write_query` | Execute INSERT, UPDATE, or DELETE queries |
+| `write_query` | Execute INSERT, UPDATE, or DELETE queries. Accepts semicolon-separated DML statements and, on SQL Server, `GO`-separated batches with optional `GO N` repeat counts. Every statement is validated before execution; SELECT and DDL remain rejected. Each `GO` batch is a separate driver call, so a later runtime failure does not roll back earlier batches. Parameterized calls cannot span `GO` batches. |
 | `create_table` | Create new tables |
 | `alter_table` | Modify existing table schema |
 | `drop_table` | Remove a table (requires `confirm: true`) |

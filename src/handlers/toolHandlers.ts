@@ -68,7 +68,10 @@ export function handleListTools() {
     },
     {
       name: "write_query",
-      description: "Execute INSERT, UPDATE, or DELETE queries",
+      description: "Execute INSERT, UPDATE, or DELETE queries. Accepts semicolon-separated DML statements and, " +
+        "for SQL Server, GO-separated batches with optional GO N repeat counts. Every statement is validated " +
+        "before execution; SELECT and DDL remain rejected. Each GO batch is a separate driver call, so a later " +
+        "runtime failure does not roll back earlier batches. Parameterized calls cannot span GO batches.",
       inputSchema: {
         type: "object",
         properties: extendProps({

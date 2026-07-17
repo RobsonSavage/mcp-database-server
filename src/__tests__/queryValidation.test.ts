@@ -80,8 +80,17 @@ describe('writeQuery validation', () => {
     expect(() => validateWriteQuery('DROP TABLE users')).toThrow('Only INSERT');
   });
 
-  it('rejects multi-statement piggyback (DDL bypass via write_query)', () => {
-    expect(() => validateWriteQuery('UPDATE users SET x=1; DROP TABLE users')).toThrow('Multiple statements');
+  it('accepts semicolon-separated DML statements', () => {
+    expect(() => validateWriteQuery('UPDATE users SET x=1; DELETE FROM users WHERE inactive=1;')).not.toThrow();
+  });
+
+  it('does not split semicolons inside strings or comments', () => {
+    expect(() => validateWriteQuery("UPDATE users SET name='a;b'; /* keep ; */ DELETE FROM users WHERE inactive=1;"))
+      .not.toThrow();
+  });
+
+  it('rejects DDL piggyback in a multi-statement batch', () => {
+    expect(() => validateWriteQuery('UPDATE users SET x=1; DROP TABLE users')).toThrow('Only INSERT');
   });
 
   it('accepts UPDATE with a single trailing semicolon', () => {
