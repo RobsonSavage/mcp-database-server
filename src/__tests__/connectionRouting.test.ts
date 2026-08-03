@@ -274,6 +274,27 @@ describe('connection routing is frozen per request', () => {
     expect(fake.calls[0].connectionTimeoutMs).toBe(30000);
   });
 
+  it('echoes the routed leaf without disturbing the payload block', async () => {
+    setStickyConnection({ server: 'B', login: 'elevated' });
+    fake.rows = () => [{ id: 1, name: 'ok' }];
+
+    const result: any = await handleToolCall('export_query', {
+      query: 'SELECT TOP 5 * FROM t',
+      format: 'csv',
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toBe('id,name\n1,"ok"\n');
+    expect(result.content[1].text).toBe('[routed: B/bdb1/elevated]');
+  });
+
+  it('does not echo a routed leaf on an error result', async () => {
+    const result: any = await handleToolCall('read_query', { query: 'DELETE FROM t' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toHaveLength(1);
+  });
+
   it('pins a resource read to its URI and ignores the sticky login', async () => {
     setStickyConnection({ server: 'B', login: 'elevated' });
     fake.rows = () => [{ name: 'id', type: 'int' }];

@@ -339,7 +339,17 @@ export async function handleToolCall(name: string, args: any) {
         database: args?.database,
         login: args?.login,
       });
-      return await runWithTarget(target, dataToolCall);
+      const result: any = await runWithTarget(target, dataToolCall);
+      // Echo the leaf this call actually used, as its own content block so
+      // content[0] stays pure CSV/TOON/JSON. A misroute then shows up in the
+      // transcript when it happens, not when someone notices missing rows.
+      if (!result?.isError && Array.isArray(result?.content)) {
+        result.content.push({
+          type: "text",
+          text: `[routed: ${target.server}/${target.database}/${target.login}]`,
+        });
+      }
+      return result;
     }
     return await dataToolCall();
   } catch (error: any) {
