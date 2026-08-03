@@ -86,11 +86,13 @@ const FIXTURE = resolve(process.cwd(), 'src/__tests__/fixtures/connections.test.
 
 /** A promise plus its resolver. */
 function deferred() {
-  let resolve!: () => void;
+  // Named `settle` rather than `resolve` so it does not shadow node:path's
+  // `resolve`, imported above.
+  let settle!: () => void;
   const promise = new Promise<void>((r) => {
-    resolve = () => r();
+    settle = () => r();
   });
-  return { promise, resolve };
+  return { promise, resolve: settle };
 }
 
 /**
