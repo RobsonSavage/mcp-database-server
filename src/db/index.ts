@@ -26,28 +26,50 @@ const pools = new Map<string, Promise<SqlServerAdapter>>();
 /**
  * Process-level sticky selection set by the `use_connection` tool.
  *
- * NOTE ON CONCURRENCY: `sticky` is module-scoped mutable state. The MCP stdio
- * transport is typically single-client-serial, so clients are expected to
- * serialize `use_connection` against subsequent tool calls. If a client fires
- * `use_connection` and `read_query` concurrently without awaiting between them,
- * routing of the read is non-deterministic. `resolveMultiAdapter` snapshots
- * sticky at the very start of each tool call (via local destructuring) so that
- * within a single tool invocation the routing is consistent even if another
- * call mutates sticky mid-flight.
+ * CONCURRENCY INVARIANT: `sticky` is module-scoped mutable state, and the MCP
+ * SDK dispatches CallTool handlers concurrently, so a fan-out of agents sharing
+ * this one stdio process can interleave a `use_connection` with another
+ * request's in-flight work. Routing is therefore frozen per request:
+ * `resolveCallTarget` reads `sticky` exactly once, at request entry, and the
+ * fully-populated CallContext it returns is pinned for the whole request by
+ * `runWithTarget`. `resolveMultiAdapter` and `getResolvedConnection` read only
+ * that store, never `sticky`, so no driver call inside a request can be
+ * rerouted by a concurrent `use_connection` - a request routes entirely to one
+ * leaf or not at all.
+ *
+ * The snapshot is tear-free because `setStickyConnection` always replaces the
+ * whole object; it never mutates fields in place.
  */
 let sticky: { server?: string; database?: string; login?: string; connectionTimeoutMs?: number } = {};
 
 /**
- * Per-tool-call override. Tool handlers set this via `runWithOverride` so tools
- * can call dbAll/dbRun/dbExec without knowing which adapter they're routed to.
+ * The frozen routing target for one request, held in AsyncLocalStorage for the
+ * duration of `runWithTarget`. Tools call dbAll/dbRun/dbExec without knowing
+ * which adapter they are routed to.
+ *
+ * All three names are required by design: a partially-populated store would
+ * force the missing levels to fall back to ambient state, which is exactly the
+ * mid-request reroute this design removes.
  */
 interface CallContext {
-  server?: string;
-  database?: string;
-  login?: string;
+  server: string;
+  database: string;
+  login: string;
   connectionTimeoutMs?: number;
 }
 const callContext = new AsyncLocalStorage<CallContext>();
+
+/**
+ * Read the frozen routing target. Absent means a driver call escaped its
+ * request scope, which would silently reintroduce ambient routing.
+ */
+function requireCallTarget(): CallContext {
+  const target = callContext.getStore();
+  if (!target) {
+    throw new Error("Internal error: database call outside a routed request context.");
+  }
+  return target;
+}
 
 /**
  * In-flight query tracking for graceful shutdown. Every `dbAll`/`dbRun`/`dbExec`
@@ -133,20 +155,17 @@ export function setStickyConnection(
 }
 
 /**
- * Resolve the current (override -> sticky -> default) connection without opening
- * a pool. Tools that need to consult connection-level flags (e.g. allowDdl)
- * before dispatching a query call this inside `runWithOverride`.
+ * Resolve this request's frozen connection without opening a pool. Tools that
+ * consult connection-level flags (e.g. allowDdl) before dispatching a query
+ * call this, and because the registry is immutable after load, the leaf they
+ * see is the same one the subsequent driver call executes against.
  */
 export function getResolvedConnection(): ResolvedConnection {
   if (!registry) {
     throw new Error("getResolvedConnection is only available in --config mode.");
   }
-  const override = callContext.getStore() ?? {};
-  return registry.resolve(
-    override.server ?? sticky.server,
-    override.database ?? sticky.database,
-    override.login ?? sticky.login,
-  );
+  const target = requireCallTarget();
+  return registry.resolve(target.server, target.database, target.login);
 }
 
 export function getStickyConnection(): ResolvedConnection | null {
@@ -155,19 +174,50 @@ export function getStickyConnection(): ResolvedConnection | null {
 }
 
 /**
- * Runs `fn` with an ambient override so that any dbAll/dbRun/dbExec calls inside
- * it target the requested (server, database, login) leaf. Used by handleToolCall
- * to scope a single MCP tool invocation to a specific connection.
+ * Runs `fn` with `target` pinned as the sole routing authority, so every
+ * dbAll/dbRun/dbExec inside it - however many, however far apart - hits the same
+ * leaf. Used by handleToolCall to scope one MCP tool invocation to one connection.
  */
-export function runWithOverride<T>(override: CallContext, fn: () => Promise<T>): Promise<T> {
-  return callContext.run(override, fn);
+export function runWithTarget<T>(target: CallContext, fn: () => Promise<T>): Promise<T> {
+  return callContext.run(target, fn);
 }
 
 /**
- * Resolve the current adapter based on (in order of precedence):
- *   1. Per-call override set via `runWithOverride` (tool-call parameters)
- *   2. Sticky selection from `use_connection`
- *   3. The registry's default leaf
+ * Snapshot the routing target for one request. This is the only place ambient
+ * `sticky` state is read; everything downstream reads the frozen result.
+ *
+ * Precedence: explicit per-call names win, then the sticky selection, then the
+ * registry defaults. Pass `inheritSticky: false` for URI-pinned paths (resource
+ * reads), which must resolve identically no matter what `use_connection` has
+ * been called in the meantime.
+ *
+ * Throws here, before the tool body runs, when a name is unknown - same message
+ * as the driver path used to produce, just earlier.
+ */
+export function resolveCallTarget(
+  explicit: { server?: string; database?: string; login?: string } = {},
+  opts: { inheritSticky?: boolean } = {}
+): CallContext {
+  if (!registry) {
+    throw new Error("Connection routing is only available in --config mode.");
+  }
+  // Single read of the module-level sticky per request.
+  const s: typeof sticky = opts.inheritSticky === false ? {} : sticky;
+  const resolved = registry.resolve(
+    explicit.server ?? s.server,
+    explicit.database ?? s.database,
+    explicit.login ?? s.login,
+  );
+  return {
+    server: resolved.serverName,
+    database: resolved.databaseName,
+    login: resolved.loginName,
+    connectionTimeoutMs: s.connectionTimeoutMs,
+  };
+}
+
+/**
+ * Resolve the adapter for this request's frozen target.
  *
  * Lazily opens and caches a SqlServerAdapter per resolved leaf key. Uses a
  * Promise-based cache to prevent concurrent-first-use races from creating
@@ -178,19 +228,10 @@ async function resolveMultiAdapter(): Promise<DbAdapter> {
     throw new Error("Multi-connection mode not initialized.");
   }
 
-  const override = callContext.getStore() ?? {};
-  // Snapshot sticky at call entry so concurrent sticky mutation doesn't
-  // reroute this in-flight call halfway through.
-  const effective = {
-    server: override.server ?? sticky.server,
-    database: override.database ?? sticky.database,
-    login: override.login ?? sticky.login,
-    connectionTimeoutMs: override.connectionTimeoutMs ?? sticky.connectionTimeoutMs,
-  };
-
-  const resolved = registry.resolve(effective.server, effective.database, effective.login);
+  const target = requireCallTarget();
+  const resolved = registry.resolve(target.server, target.database, target.login);
   // Runtime timeout override takes precedence over config-file value.
-  const effectiveTimeout = effective.connectionTimeoutMs ?? resolved.connectionTimeoutMs;
+  const effectiveTimeout = target.connectionTimeoutMs ?? resolved.connectionTimeoutMs;
   // Include timeout in pool key so different timeouts get separate pools.
   const poolKey = effectiveTimeout !== resolved.connectionTimeoutMs
     ? `${resolved.key}:t=${effectiveTimeout}`

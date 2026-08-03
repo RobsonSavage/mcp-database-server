@@ -5,7 +5,8 @@ import {
   getDatabaseMetadata,
   isMultiConnectionMode,
   getRegistry,
-  runWithOverride,
+  resolveCallTarget,
+  runWithTarget,
 } from '../db/index.js';
 
 const SCHEMA_PATH = 'schema';
@@ -112,12 +113,15 @@ async function listResourcesMulti() {
 
   for (const serverEntry of description.servers) {
     for (const dbEntry of serverEntry.databases) {
-      // List tables on this specific leaf. runWithOverride routes the
-      // subsequent dbAll to the adapter for (server, database) using the
-      // default login.
+      // List tables on this specific leaf, pinned to the entry being listed.
+      // inheritSticky: false keeps the sticky login out of the resolution -
+      // the listing must describe the registry, not the current selection.
       try {
-        const tables: Array<{ name: string }> = await runWithOverride(
-          { server: serverEntry.name, database: dbEntry.name },
+        const tables: Array<{ name: string }> = await runWithTarget(
+          resolveCallTarget(
+            { server: serverEntry.name, database: dbEntry.name },
+            { inheritSticky: false }
+          ),
           async () => {
             const query = await getListTablesQuery();
             return (await dbAll(query)) as Array<{ name: string }>;
@@ -177,7 +181,12 @@ export async function handleReadResource(uri: string) {
     };
 
     if (isMultiConnectionMode() && server && database) {
-      return await runWithOverride({ server, database }, readBody);
+      // inheritSticky: false so the login comes from the registry default for
+      // this leaf, not from whatever use_connection last set.
+      return await runWithTarget(
+        resolveCallTarget({ server, database }, { inheritSticky: false }),
+        readBody
+      );
     }
     return await readBody();
   } catch (error: any) {

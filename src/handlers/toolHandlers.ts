@@ -8,7 +8,8 @@ import { appendInsight, listInsights } from '../tools/insightTools.js';
 // Multi-connection plumbing
 import {
   isMultiConnectionMode,
-  runWithOverride,
+  resolveCallTarget,
+  runWithTarget,
   setStickyConnection,
   getStickyConnection,
   getRegistry,
@@ -217,8 +218,10 @@ export function handleListTools() {
           "Set the sticky connection (server/database/login) used by subsequent tool calls that do not " +
           "explicitly name a connection. Any subset of server, database, login may be provided — missing " +
           "levels fall back to the registry defaults. Pass `reset: true` to clear the sticky selection " +
-          "and return to the registry default. Note: use_connection should be called and awaited before " +
-          "subsequent tool calls. Concurrent calls may see non-deterministic routing.",
+          "and return to the registry default. Routing is frozen per request: whichever sticky is in " +
+          "effect when a tool call is dispatched governs that entire call, so a use_connection issued " +
+          "while another call is in flight cannot reroute it. Explicit server/database/login arguments " +
+          "on a tool call always win over the sticky.",
         inputSchema: {
           type: "object",
           properties: {
@@ -243,9 +246,9 @@ export function handleListTools() {
 }
 
 /**
- * Dispatch a tool call. In multi-connection mode, tool invocations are wrapped
- * in runWithOverride so that any dbAll/dbRun/dbExec calls inside the tool see
- * the right adapter. The tool functions themselves stay untouched.
+ * Dispatch a tool call. In multi-connection mode, the routing target is resolved
+ * once up front and pinned via runWithTarget, so any dbAll/dbRun/dbExec calls
+ * inside the tool see the same adapter. The tool functions stay untouched.
  */
 export async function handleToolCall(name: string, args: any) {
   try {
@@ -328,10 +331,15 @@ export async function handleToolCall(name: string, args: any) {
     };
 
     if (isMultiConnectionMode()) {
-      return await runWithOverride(
-        { server: args?.server, database: args?.database, login: args?.login },
-        dataToolCall
-      );
+      // Resolve the leaf once, before the tool body runs, and pin it for the
+      // whole invocation. Every driver call inside reads that frozen target, so
+      // a use_connection arriving mid-flight cannot straddle two leaves.
+      const target = resolveCallTarget({
+        server: args?.server,
+        database: args?.database,
+        login: args?.login,
+      });
+      return await runWithTarget(target, dataToolCall);
     }
     return await dataToolCall();
   } catch (error: any) {

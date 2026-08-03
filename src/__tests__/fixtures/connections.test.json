@@ -1,0 +1,44 @@
+{
+  "servers": {
+    "A": {
+      "default": true,
+      "allowDdl": true,
+      "databases": {
+        "db1": {
+          "default": true,
+          "logins": {
+            "appuser": {
+              "trustedConnection": true,
+              "options": { "probeLogin": "appuser" }
+            }
+          }
+        },
+        "db2": {
+          "logins": {
+            "appuser": {
+              "trustedConnection": true,
+              "options": { "probeLogin": "appuser" }
+            }
+          }
+        }
+      }
+    },
+    "B": {
+      "databases": {
+        "bdb1": {
+          "logins": {
+            "readonly": {
+              "default": true,
+              "trustedConnection": true,
+              "options": { "probeLogin": "readonly" }
+            },
+            "elevated": {
+              "trustedConnection": true,
+              "options": { "probeLogin": "elevated" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
