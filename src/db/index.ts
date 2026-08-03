@@ -187,9 +187,10 @@ export function runWithTarget<T>(target: CallContext, fn: () => Promise<T>): Pro
  * `sticky` state is read; everything downstream reads the frozen result.
  *
  * Precedence: explicit per-call names win, then the sticky selection, then the
- * registry defaults. Pass `inheritSticky: false` for URI-pinned paths (resource
- * reads), which must resolve identically no matter what `use_connection` has
- * been called in the meantime.
+ * registry defaults. Sticky inheritance is branch-scoped - see below. Pass
+ * `inheritSticky: false` for URI-pinned paths (resource reads), which must
+ * resolve identically no matter what `use_connection` has been called in the
+ * meantime.
  *
  * Throws here, before the tool body runs, when a name is unknown - same message
  * as the driver path used to produce, just earlier.
@@ -203,10 +204,21 @@ export function resolveCallTarget(
   }
   // Single read of the module-level sticky per request.
   const s: typeof sticky = opts.inheritSticky === false ? {} : sticky;
+  // A sticky name only means anything inside the branch it was resolved under.
+  // Once an explicit name redirects the call to a different server - or to a
+  // different database on that server - every sticky level below the redirect
+  // is dropped so it falls through to that branch's registry defaults. Carrying
+  // them across instead names a database or login that need not exist there,
+  // which fails the call outright rather than routing it where it clearly meant
+  // to go. `== null` (not `=== undefined`) so a JSON null reads as absent, the
+  // same way `??` treats it below.
+  const sameServer = explicit.server == null || explicit.server === s.server;
+  const sameDatabase =
+    sameServer && (explicit.database == null || explicit.database === s.database);
   const resolved = registry.resolve(
     explicit.server ?? s.server,
-    explicit.database ?? s.database,
-    explicit.login ?? s.login,
+    explicit.database ?? (sameServer ? s.database : undefined),
+    explicit.login ?? (sameDatabase ? s.login : undefined),
   );
   return {
     server: resolved.serverName,

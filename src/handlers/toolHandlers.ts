@@ -18,18 +18,20 @@ import {
 
 /**
  * Optional connection-selection properties added to every tool's inputSchema when
- * multi-connection mode is active. Each field is independent and optional — missing
- * levels fall through to the sticky selection (set by use_connection) and then to
- * the registry defaults.
+ * multi-connection mode is active. Each field is optional; missing levels fall
+ * through to the sticky selection (set by use_connection) and then to the registry
+ * defaults - but only within the sticky's own branch. Naming a different server or
+ * database drops the sticky levels below it, which then come from that branch's
+ * defaults instead of naming something that need not exist there.
  */
 const CONNECTION_PROPS = {
   server: {
     type: "string",
-    description: "(optional) Target server name from the connection registry. Falls back to sticky or default.",
+    description: "(optional) Target server name from the connection registry. Falls back to sticky or default. Naming a server other than the sticky one resets database and login to that server's defaults.",
   },
   database: {
     type: "string",
-    description: "(optional) Target database name on that server. Falls back to sticky or default.",
+    description: "(optional) Target database name on that server. Falls back to sticky or default. Naming a database other than the sticky one resets login to that database's default.",
   },
   login: {
     type: "string",

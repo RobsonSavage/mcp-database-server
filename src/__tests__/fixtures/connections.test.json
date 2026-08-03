@@ -16,8 +16,13 @@
         "db2": {
           "logins": {
             "appuser": {
+              "default": true,
               "trustedConnection": true,
               "options": { "probeLogin": "appuser" }
+            },
+            "db2only": {
+              "trustedConnection": true,
+              "options": { "probeLogin": "db2only" }
             }
           }
         }

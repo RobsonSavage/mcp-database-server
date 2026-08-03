@@ -175,6 +175,44 @@ describe('connection routing is frozen per request', () => {
     expect(keys).toEqual(new Array(4).fill('A/db1/appuser'));
   });
 
+  it('drops the sticky database and login when routed to another server', async () => {
+    setStickyConnection({ server: 'B', login: 'elevated' });
+
+    const target = resolveCallTarget({ server: 'A' });
+
+    // Neither 'bdb1' nor 'elevated' exists under A, so both fall through to A's
+    // defaults rather than failing the call.
+    expect(`${target.server}/${target.database}/${target.login}`).toBe('A/db1/appuser');
+  });
+
+  it('drops the sticky login when routed to another database on the sticky server', async () => {
+    setStickyConnection({ server: 'A', database: 'db2', login: 'db2only' });
+
+    const result: any = await handleToolCall('read_query', {
+      database: 'db1',
+      query: 'SELECT 1',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(leaves()).toEqual(['A/db1/appuser']);
+  });
+
+  it('keeps the sticky levels when the explicit name re-states the sticky branch', async () => {
+    setStickyConnection({ server: 'B', login: 'elevated' });
+
+    const target = resolveCallTarget({ server: 'B' });
+
+    expect(`${target.server}/${target.database}/${target.login}`).toBe('B/bdb1/elevated');
+  });
+
+  it('lets an explicit login win over the sticky one on the same branch', async () => {
+    setStickyConnection({ server: 'B', login: 'elevated' });
+
+    const target = resolveCallTarget({ login: 'readonly' });
+
+    expect(`${target.server}/${target.database}/${target.login}`).toBe('B/bdb1/readonly');
+  });
+
   it('describe_table keeps all four routing reads on one leaf', async () => {
     setStickyConnection({ server: 'A', database: 'db1' });
     fake.rows = (q) => (q === 'LIST_TABLES' ? [{ name: 'T' }] : [{ name: 'id', type: 'int' }]);
