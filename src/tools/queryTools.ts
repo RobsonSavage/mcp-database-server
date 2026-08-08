@@ -206,7 +206,14 @@ export function validateReadQuery(query: string, tool = "read_query"): string {
 
 /**
  * Validate a write-path batch (write_query). Allows semicolon-separated
- * INSERT/UPDATE/DELETE statements, rejects SELECT and DDL, and returns the SQL.
+ * INSERT/UPDATE/DELETE statements plus PRINT, rejects SELECT and DDL, and
+ * returns the SQL.
+ *
+ * PRINT is admitted so a write batch can annotate its own progress; the output
+ * comes back in the tool's `messages`. It mutates nothing, so it does not widen
+ * the execute_ddl gate this check backstops - and that check was never a
+ * security boundary anyway, since T-SQL does not require semicolons between
+ * statements and the split is on `;`.
  */
 export function validateWriteQuery(query: string): string {
   const statements = splitOnSemicolons(query);
@@ -221,8 +228,9 @@ export function validateWriteQuery(query: string): string {
     if (lower.startsWith("select")) {
       throw new Error("Use read_query for SELECT operations");
     }
-    if (!(lower.startsWith("insert") || lower.startsWith("update") || lower.startsWith("delete"))) {
-      throw new Error("Only INSERT, UPDATE, or DELETE operations are allowed with write_query");
+    if (!(lower.startsWith("insert") || lower.startsWith("update") ||
+          lower.startsWith("delete") || lower.startsWith("print"))) {
+      throw new Error("Only INSERT, UPDATE, DELETE, or PRINT operations are allowed with write_query");
     }
   }
 
@@ -254,10 +262,17 @@ export async function readQuery(query: string, params: any[] = [], format: ReadQ
  * Execute one or more data modification statements. SQL Server GO batches are
  * executed separately, matching sqlcmd/SSMS batch semantics. All batches are
  * validated before the first write. Parameterized calls must use one batch.
+ *
+ * PRINT / low-severity RAISERROR output is returned as `messages` (omitted when
+ * nothing was printed) and, on failure, the messages from batches that already
+ * completed are appended to the error - same contract as execute_ddl.
  * @param query SQL query to execute
  * @returns Information about affected rows
  */
 export async function writeQuery(query: string, params: any[] = []) {
+  // Declared outside the try so the catch can report what earlier batches
+  // printed before the failing one threw.
+  const messages: string[] = [];
   try {
     const isSqlServer = getDbType() === 'sqlserver';
     const batches = isSqlServer ? splitOnGo(query) : [{ sql: query, repeat: 1 }];
@@ -278,11 +293,18 @@ export async function writeQuery(query: string, params: any[] = []) {
       for (let i = 0; i < batch.repeat; i++) {
         const result = await dbRun(batch.sql, params);
         affectedRows += result.changes;
+        messages.push(...result.messages);
       }
     }
-    return formatSuccessResponse({ affected_rows: affectedRows });
+    return formatSuccessResponse({
+      affected_rows: affectedRows,
+      ...(messages.length > 0 ? { messages } : {}),
+    });
   } catch (error: any) {
-    throw new Error(`SQL Error: ${error.message}`);
+    const printed = messages.length > 0
+      ? `\nMessages from completed batches:\n${messages.join('\n')}`
+      : '';
+    throw new Error(`SQL Error: ${error.message}${printed}`);
   }
 }
 
@@ -295,11 +317,20 @@ export async function writeQuery(query: string, params: any[] = []) {
  * ... etc. Batches are NOT wrapped in a single transaction (GO ends a batch by
  * definition); a failure mid-script leaves earlier batches committed.
  *
+ * PRINT / low-severity RAISERROR output from every batch is collected and
+ * returned as `messages` (omitted when the script printed nothing), so a
+ * migration script's own progress reporting reaches the caller instead of being
+ * discarded with the driver's info events. On failure the messages produced
+ * before the throw are appended to the error.
+ *
  * Gated by two independent flags: ALLOW_DDL=true in the process env AND, in
  * multi-connection mode, "allowDdl": true on the resolved connection. The
  * database-level "allowDdl" overrides the server-level one when set.
  */
 export async function executeDdl(query: string) {
+  // Declared outside the try so the catch can report what earlier batches
+  // printed before the failing one threw.
+  const messages: string[] = [];
   try {
     if (process.env.ALLOW_DDL !== 'true') {
       throw new Error("execute_ddl is disabled. Set ALLOW_DDL=true in the server environment to enable.");
@@ -329,14 +360,22 @@ export async function executeDdl(query: string) {
     let executed = 0;
     for (const b of batches) {
       for (let i = 0; i < b.repeat; i++) {
-        await dbExec(b.sql);
+        const result = await dbExec(b.sql);
+        messages.push(...result.messages);
         executed++;
       }
     }
     const batchWord = executed === 1 ? 'batch' : 'batches';
-    return formatSuccessResponse({ success: true, message: `DDL executed (${executed} ${batchWord})` });
+    return formatSuccessResponse({
+      success: true,
+      message: `DDL executed (${executed} ${batchWord})`,
+      ...(messages.length > 0 ? { messages } : {}),
+    });
   } catch (error: any) {
-    throw new Error(`DDL Error: ${error.message}`);
+    const printed = messages.length > 0
+      ? `\nMessages from completed batches:\n${messages.join('\n')}`
+      : '';
+    throw new Error(`DDL Error: ${error.message}${printed}`);
   }
 }
 

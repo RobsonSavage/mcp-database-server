@@ -1,4 +1,4 @@
-import { DbAdapter, assertSafeIdentifier } from "./adapter.js";
+import { DbAdapter, ExecResult, RunResult, assertSafeIdentifier } from "./adapter.js";
 import mysql from "mysql2/promise";
 import { Signer } from "@aws-sdk/rds-signer";
 
@@ -151,7 +151,7 @@ export class MysqlAdapter implements DbAdapter {
   /**
    * Execute a SQL query that modifies data
    */
-  async run(query: string, params: any[] = []): Promise<{ changes: number, lastID: number }> {
+  async run(query: string, params: any[] = []): Promise<RunResult> {
     if (!this.pool) {
       throw new Error("Database not initialized");
     }
@@ -159,21 +159,23 @@ export class MysqlAdapter implements DbAdapter {
       const [result]: any = await this.pool.execute(query, params);
       const changes = result.affectedRows || 0;
       const lastID = result.insertId || 0;
-      return { changes, lastID };
+      return { changes, lastID, messages: [] };
     } catch (err) {
       throw new Error(`MySQL query error: ${(err as Error).message}`);
     }
   }
 
   /**
-   * Execute multiple SQL statements
+   * Execute multiple SQL statements. MySQL has no PRINT-style message channel,
+   * so `messages` is always empty.
    */
-  async exec(query: string): Promise<void> {
+  async exec(query: string): Promise<ExecResult> {
     if (!this.pool) {
       throw new Error("Database not initialized");
     }
     try {
       await this.pool.query(query);
+      return { messages: [] };
     } catch (err) {
       throw new Error(`MySQL batch error: ${(err as Error).message}`);
     }

@@ -1,5 +1,5 @@
 import sqlite3 from "sqlite3";
-import { DbAdapter, assertSafeIdentifier } from "./adapter.js";
+import { DbAdapter, ExecResult, RunResult, assertSafeIdentifier } from "./adapter.js";
 
 /**
  * SQLite database adapter implementation
@@ -59,7 +59,7 @@ export class SqliteAdapter implements DbAdapter {
    * @param params Query parameters
    * @returns Promise with result info
    */
-  async run(query: string, params: any[] = []): Promise<{ changes: number, lastID: number }> {
+  async run(query: string, params: any[] = []): Promise<RunResult> {
     if (!this.db) {
       throw new Error("Database not initialized");
     }
@@ -69,7 +69,7 @@ export class SqliteAdapter implements DbAdapter {
         if (err) {
           reject(err);
         } else {
-          resolve({ changes: this.changes, lastID: this.lastID });
+          resolve({ changes: this.changes, lastID: this.lastID, messages: [] });
         }
       });
     });
@@ -78,9 +78,10 @@ export class SqliteAdapter implements DbAdapter {
   /**
    * Execute multiple SQL statements
    * @param query SQL statements to execute
-   * @returns Promise that resolves when execution completes
+   * @returns Promise that resolves when execution completes. SQLite has no
+   *          server-message channel, so `messages` is always empty.
    */
-  async exec(query: string): Promise<void> {
+  async exec(query: string): Promise<ExecResult> {
     if (!this.db) {
       throw new Error("Database not initialized");
     }
@@ -90,7 +91,7 @@ export class SqliteAdapter implements DbAdapter {
         if (err) {
           reject(err);
         } else {
-          resolve();
+          resolve({ messages: [] });
         }
       });
     });

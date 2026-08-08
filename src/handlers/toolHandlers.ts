@@ -72,9 +72,11 @@ export function handleListTools() {
     {
       name: "write_query",
       description: "Execute INSERT, UPDATE, or DELETE queries. Accepts semicolon-separated DML statements and, " +
-        "for SQL Server, GO-separated batches with optional GO N repeat counts. Every statement is validated " +
+        "for SQL Server, GO-separated batches with optional GO N repeat counts. PRINT statements are allowed " +
+        "alongside the DML so a batch can report its own progress. Every statement is validated " +
         "before execution; SELECT and DDL remain rejected. Each GO batch is a separate driver call, so a later " +
-        "runtime failure does not roll back earlier batches. Parameterized calls cannot span GO batches.",
+        "runtime failure does not roll back earlier batches. Parameterized calls cannot span GO batches. " +
+        "PRINT output, low-severity RAISERROR, and engine warnings are returned in a `messages` array.",
       inputSchema: {
         type: "object",
         properties: extendProps({
@@ -170,7 +172,8 @@ export function handleListTools() {
         "triggers, indexes, etc., plus EXEC sp_rename / sp_addextendedproperty / sp_helptext, semicolon- " +
         "separated multi-statement batches, AND (SQL Server only) GO-separated batches with optional `GO N` " +
         "repeat counts — each GO-batch runs as its own driver call, NOT wrapped in a shared transaction (a " +
-        "failure mid-script leaves earlier batches committed). Only available when the server is started with " +
+        "failure mid-script leaves earlier batches committed). PRINT and low-severity RAISERROR output is " +
+        "returned in a `messages` array. Only available when the server is started with " +
         "ALLOW_DDL=true and, in multi-connection mode, the resolved server has \"allowDdl\": true. Use " +
         "write_query for DML parameterization.",
       inputSchema: {

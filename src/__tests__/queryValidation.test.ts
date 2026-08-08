@@ -96,4 +96,13 @@ describe('writeQuery validation', () => {
   it('accepts UPDATE with a single trailing semicolon', () => {
     expect(() => validateWriteQuery('UPDATE users SET name = \'x\';')).not.toThrow();
   });
+
+  it('accepts PRINT interleaved with DML', () => {
+    expect(() => validateWriteQuery("PRINT 'archiving'; DELETE FROM users WHERE inactive=1; PRINT 'done';"))
+      .not.toThrow();
+  });
+
+  it('still rejects DDL piggybacked behind a PRINT', () => {
+    expect(() => validateWriteQuery("PRINT 'x'; DROP TABLE users")).toThrow('Only INSERT');
+  });
 });

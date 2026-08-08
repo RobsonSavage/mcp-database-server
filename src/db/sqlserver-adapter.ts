@@ -1,10 +1,39 @@
 import type * as sql from "mssql";
-import { DbAdapter, assertSafeIdentifier } from "./adapter.js";
+import { DbAdapter, ExecResult, RunResult, assertSafeIdentifier } from "./adapter.js";
 
 // We dynamically import the correct mssql entry point at init() time so that
 // msnodesqlv8 remains an optional dependency — users who only use SQL auth via
 // Tedious should not pay a native-compile cost.
 type MssqlModule = typeof import('mssql');
+
+/**
+ * Drop the ODBC diagnostic prefix msnodesqlv8 puts in front of every server
+ * message, e.g. `[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Hi`.
+ * mssql only strips it for the long-obsolete "SQL Server Native Client 11.0"
+ * driver name, so with a modern ODBC driver the prefix reaches the caller.
+ * Anchored on `[Microsoft]` and terminated at `[SQL Server]` so a PRINT whose
+ * own text starts with a bracket is left alone. No-op for Tedious, which does
+ * not prefix.
+ */
+export function stripOdbcPrefix(message: string): string {
+  return message.replace(/^\[Microsoft\](?:\[[^\]]*\])*?\[SQL Server\]/, '');
+}
+
+/**
+ * Row count for a batch: the first entry that actually reports one.
+ *
+ * `rowsAffected` holds one entry per statement, and statements with no row
+ * count - PRINT, SET, control flow - report -1. Reading `rowsAffected[0]`
+ * blindly turns a batch that opens with `PRINT 'starting'` into -1 affected
+ * rows. Measured on ODBC Driver 18: `PRINT 'a'; INSERT 3 rows; UPDATE 3 rows`
+ * yields [-1, 3, 3].
+ *
+ * Still only the FIRST counting statement, so a multi-statement batch under-
+ * reports exactly as it did before PRINT was admitted.
+ */
+function firstRowCount(rowsAffected: number[]): number {
+  return rowsAffected.find(n => n >= 0) ?? 0;
+}
 
 /**
  * SQL Server database adapter.
@@ -161,6 +190,31 @@ export class SqlServerAdapter implements DbAdapter {
     return query.replace(/\?/g, () => `@param${idx++}`);
   }
 
+  /**
+   * Route the server's message channel into `sink`.
+   *
+   * PRINT, RAISERROR with severity <= 10, and DBCC/statistics output never
+   * appear in a result set - the driver surfaces them as `info` events on the
+   * Request, and both mssql drivers (Tedious and msnodesqlv8) emit them there.
+   * Must be called before the request is dispatched or the messages are dropped.
+   */
+  private captureMessages(request: sql.Request, sink: string[]): void {
+    request.on('info', (info: any) => {
+      if (typeof info?.message === 'string') sink.push(stripOdbcPrefix(info.message));
+    });
+  }
+
+  /**
+   * Wrap a driver failure, carrying whatever the batch printed before it threw
+   * so diagnostics on the way to an error are not lost with the request.
+   */
+  private failure(prefix: string, err: unknown, messages: string[]): Error {
+    const printed = messages.length > 0
+      ? `\nMessages before failure:\n${messages.join('\n')}`
+      : '';
+    return new Error(`${prefix}: ${(err as Error).message}${printed}`);
+  }
+
   async all(query: string, params: any[] = []): Promise<any[]> {
     if (!this.pool || !this.sql) {
       throw new Error("Database not initialized");
@@ -187,13 +241,15 @@ export class SqlServerAdapter implements DbAdapter {
     }
   }
 
-  async run(query: string, params: any[] = []): Promise<{ changes: number, lastID: number }> {
+  async run(query: string, params: any[] = []): Promise<RunResult> {
     if (!this.pool || !this.sql) {
       throw new Error("Database not initialized");
     }
 
+    const messages: string[] = [];
     try {
       const request = new this.sql.Request(this.pool);
+      this.captureMessages(request, messages);
       const preparedQuery = (params && params.length > 0)
         ? (() => {
             params.forEach((param, index) => {
@@ -210,28 +266,32 @@ export class SqlServerAdapter implements DbAdapter {
         const updatedQuery = `${preparedQuery}; SELECT @insertedId = SCOPE_IDENTITY();`;
         const result = await request.query(updatedQuery);
         lastID = (result.output as any).insertedId || 0;
-        changes = result.rowsAffected[0] || 0;
+        changes = firstRowCount(result.rowsAffected);
       } else {
         const result = await request.query(preparedQuery);
-        changes = result.rowsAffected[0] || 0;
+        changes = firstRowCount(result.rowsAffected);
       }
 
-      return { changes, lastID };
+      return { changes, lastID, messages };
     } catch (err) {
-      throw new Error(`SQL Server query error: ${(err as Error).message}`);
+      throw this.failure('SQL Server query error', err, messages);
     }
   }
 
-  async exec(query: string): Promise<void> {
+  /** Run a batch and return whatever the server printed. */
+  async exec(query: string): Promise<ExecResult> {
     if (!this.pool || !this.sql) {
       throw new Error("Database not initialized");
     }
 
+    const messages: string[] = [];
     try {
       const request = new this.sql.Request(this.pool);
+      this.captureMessages(request, messages);
       await request.batch(query);
+      return { messages };
     } catch (err) {
-      throw new Error(`SQL Server batch error: ${(err as Error).message}`);
+      throw this.failure('SQL Server batch error', err, messages);
     }
   }
 

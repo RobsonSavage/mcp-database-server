@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { DbAdapter, createDbAdapter } from './adapter.js';
+import { DbAdapter, ExecResult, RunResult, createDbAdapter } from './adapter.js';
 import { ConnectionRegistry, ResolvedConnection } from '../config/loader.js';
 import { SqlServerAdapter } from './sqlserver-adapter.js';
 
@@ -296,12 +296,12 @@ export async function dbAll(query: string, params: any[] = []): Promise<any[]> {
   return trackInflight(adapter.all(query, params));
 }
 
-export async function dbRun(query: string, params: any[] = []): Promise<{ changes: number, lastID: number }> {
+export async function dbRun(query: string, params: any[] = []): Promise<RunResult> {
   const adapter = await currentAdapter();
   return trackInflight(adapter.run(query, params));
 }
 
-export async function dbExec(query: string): Promise<void> {
+export async function dbExec(query: string): Promise<ExecResult> {
   const adapter = await currentAdapter();
   return trackInflight(adapter.exec(query));
 }

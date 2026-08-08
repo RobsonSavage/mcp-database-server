@@ -22,6 +22,8 @@ const fake = vi.hoisted(() => ({
   barrier: null as null | ((op: string) => Promise<void> | void),
   /** Rows returned by `all`. Defaults to an empty result set. */
   rows: null as null | ((query: string) => any[]),
+  /** Server messages (PRINT output) returned by `exec`/`run`. Defaults to none. */
+  messages: null as null | ((query: string) => string[]),
 }));
 
 vi.mock('../db/sqlserver-adapter.js', () => {
@@ -44,14 +46,15 @@ vi.mock('../db/sqlserver-adapter.js', () => {
       if (fake.barrier) await fake.barrier('all');
       return fake.rows ? fake.rows(query) : [];
     }
-    async run(query: string): Promise<{ changes: number; lastID: number }> {
+    async run(query: string): Promise<{ changes: number; lastID: number; messages: string[] }> {
       this.record('run', query);
       if (fake.barrier) await fake.barrier('run');
-      return { changes: 1, lastID: 0 };
+      return { changes: 1, lastID: 0, messages: fake.messages ? fake.messages(query) : [] };
     }
-    async exec(query: string): Promise<void> {
+    async exec(query: string): Promise<{ messages: string[] }> {
       this.record('exec', query);
       if (fake.barrier) await fake.barrier('exec');
+      return { messages: fake.messages ? fake.messages(query) : [] };
     }
     // Resolving these also picks an adapter, so they count as routing reads.
     getListTablesQuery(): string {
@@ -123,6 +126,7 @@ describe('connection routing is frozen per request', () => {
     fake.calls.length = 0;
     fake.barrier = null;
     fake.rows = null;
+    fake.messages = null;
     await initDatabasePool(ConnectionRegistry.load(FIXTURE));
     setStickyConnection({ reset: true });
   });
@@ -251,6 +255,22 @@ describe('connection routing is frozen per request', () => {
 
     expect(result.isError).toBeFalsy();
     expect(leaves()).toEqual(['A/db1/appuser', 'A/db1/appuser']);
+  });
+
+  it('execute_ddl returns the PRINT output of every batch', async () => {
+    process.env.ALLOW_DDL = 'true';
+    setStickyConnection({ server: 'A', database: 'db1' });
+    fake.messages = (q) => [`printed from: ${q}`];
+
+    const result: any = await handleToolCall('execute_ddl', {
+      query: 'PRINT 1\nGO\nPRINT 2',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(responseText(result)).messages).toEqual([
+      'printed from: PRINT 1',
+      'printed from: PRINT 2',
+    ]);
   });
 
   it('execute_ddl rejects a server without allowDdl and executes nothing', async () => {

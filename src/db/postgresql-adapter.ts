@@ -1,4 +1,4 @@
-import { DbAdapter, assertSafeIdentifier } from "./adapter.js";
+import { DbAdapter, ExecResult, RunResult, assertSafeIdentifier } from "./adapter.js";
 import pg from 'pg';
 
 /**
@@ -95,7 +95,7 @@ export class PostgresqlAdapter implements DbAdapter {
    * @param params Query parameters
    * @returns Promise with result info
    */
-  async run(query: string, params: any[] = []): Promise<{ changes: number, lastID: number }> {
+  async run(query: string, params: any[] = []): Promise<RunResult> {
     if (!this.pool) {
       throw new Error("Database not initialized");
     }
@@ -122,7 +122,7 @@ export class PostgresqlAdapter implements DbAdapter {
         changes = result.rowCount || 0;
       }
 
-      return { changes, lastID };
+      return { changes, lastID, messages: [] };
     } catch (err) {
       throw new Error(`PostgreSQL query error: ${(err as Error).message}`);
     }
@@ -131,15 +131,18 @@ export class PostgresqlAdapter implements DbAdapter {
   /**
    * Execute multiple SQL statements
    * @param query SQL statements to execute
-   * @returns Promise that resolves when execution completes
+   * @returns Promise that resolves when execution completes. RAISE NOTICE
+   *          output is emitted on the pooled client, not the result, and is not
+   *          collected here yet - `messages` is always empty.
    */
-  async exec(query: string): Promise<void> {
+  async exec(query: string): Promise<ExecResult> {
     if (!this.pool) {
       throw new Error("Database not initialized");
     }
 
     try {
       await this.pool.query(query);
+      return { messages: [] };
     } catch (err) {
       throw new Error(`PostgreSQL batch error: ${(err as Error).message}`);
     }

@@ -1,4 +1,29 @@
 /**
+ * Result of a batch execution.
+ *
+ * `messages` carries the server's informational output - the SSMS "Messages"
+ * tab. On SQL Server that is PRINT and RAISERROR with severity <= 10, which the
+ * driver delivers as out-of-band `info` events rather than in the result set, so
+ * an adapter that ignores them drops the output entirely. Adapters for engines
+ * with no equivalent channel (or where it is not wired up yet) return an empty
+ * array.
+ */
+export interface ExecResult {
+  messages: string[];
+}
+
+/**
+ * Result of a data-modifying statement. `messages` carries the same server
+ * output as {@link ExecResult}: a write batch can PRINT progress just as a DDL
+ * batch can, and the driver delivers it on the same out-of-band channel.
+ */
+export interface RunResult {
+  changes: number;
+  lastID: number;
+  messages: string[];
+}
+
+/**
  * Database adapter interface
  * Defines the contract for all database implementations (SQLite, SQL Server)
  */
@@ -25,13 +50,14 @@ export interface DbAdapter {
    * @param query SQL query to execute
    * @param params Query parameters
    */
-  run(query: string, params?: any[]): Promise<{ changes: number, lastID: number }>;
+  run(query: string, params?: any[]): Promise<RunResult>;
 
   /**
    * Execute multiple SQL statements
    * @param query SQL statements to execute
+   * @returns Server-emitted informational messages produced by the batch
    */
-  exec(query: string): Promise<void>;
+  exec(query: string): Promise<ExecResult>;
 
   /**
    * Get database metadata
