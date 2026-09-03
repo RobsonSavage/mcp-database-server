@@ -73,11 +73,11 @@ describe('writeQuery validation', () => {
   });
 
   it('rejects CREATE TABLE', () => {
-    expect(() => validateWriteQuery('CREATE TABLE foo (id INT)')).toThrow('Only INSERT');
+    expect(() => validateWriteQuery('CREATE TABLE foo (id INT)')).toThrow('write_query accepts only');
   });
 
   it('rejects DROP TABLE', () => {
-    expect(() => validateWriteQuery('DROP TABLE users')).toThrow('Only INSERT');
+    expect(() => validateWriteQuery('DROP TABLE users')).toThrow('write_query accepts only');
   });
 
   it('accepts semicolon-separated DML statements', () => {
@@ -90,7 +90,7 @@ describe('writeQuery validation', () => {
   });
 
   it('rejects DDL piggyback in a multi-statement batch', () => {
-    expect(() => validateWriteQuery('UPDATE users SET x=1; DROP TABLE users')).toThrow('Only INSERT');
+    expect(() => validateWriteQuery('UPDATE users SET x=1; DROP TABLE users')).toThrow('write_query accepts only');
   });
 
   it('accepts UPDATE with a single trailing semicolon', () => {
@@ -103,6 +103,24 @@ describe('writeQuery validation', () => {
   });
 
   it('still rejects DDL piggybacked behind a PRINT', () => {
-    expect(() => validateWriteQuery("PRINT 'x'; DROP TABLE users")).toThrow('Only INSERT');
+    expect(() => validateWriteQuery("PRINT 'x'; DROP TABLE users")).toThrow('write_query accepts only');
+  });
+
+  it('rejects a scripted scenario and names execute_ddl as the right tool', () => {
+    const scripted =
+      'CREATE TABLE #probe (id int);\n' +
+      "INSERT INTO #probe VALUES (1);\n" +
+      'SELECT COUNT(*) FROM #probe;';
+    expect(() => validateWriteQuery(scripted)).toThrow(/execute_ddl/);
+  });
+
+  it('rejects BEGIN TRAN with a routing error naming execute_ddl', () => {
+    expect(() => validateWriteQuery('BEGIN TRAN; UPDATE t SET x=1; ROLLBACK'))
+      .toThrow(/execute_ddl/);
+  });
+
+  it('rejects DECLARE with a routing error naming execute_ddl', () => {
+    expect(() => validateWriteQuery('DECLARE @n int; UPDATE t SET x=@n'))
+      .toThrow(/execute_ddl/);
   });
 });

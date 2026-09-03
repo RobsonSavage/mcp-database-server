@@ -79,7 +79,8 @@ export class SqliteAdapter implements DbAdapter {
    * Execute multiple SQL statements
    * @param query SQL statements to execute
    * @returns Promise that resolves when execution completes. SQLite has no
-   *          server-message channel, so `messages` is always empty.
+   *          server-message channel, so `messages` is always empty; sqlite3's
+   *          exec() discards rows, so `resultSets` is too.
    */
   async exec(query: string): Promise<ExecResult> {
     if (!this.db) {
@@ -91,7 +92,7 @@ export class SqliteAdapter implements DbAdapter {
         if (err) {
           reject(err);
         } else {
-          resolve({ messages: [] });
+          resolve({ messages: [], resultSets: [] });
         }
       });
     });

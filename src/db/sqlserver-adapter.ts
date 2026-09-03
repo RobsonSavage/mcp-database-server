@@ -278,7 +278,12 @@ export class SqlServerAdapter implements DbAdapter {
     }
   }
 
-  /** Run a batch and return whatever the server printed. */
+  /**
+   * Run a batch and return whatever the server printed plus any recordsets the
+   * script's SELECTs produced. mssql's batch() resolves with one recordset per
+   * SELECT-shaped statement, in statement order (base/request.js); discarding
+   * them is what made execute_ddl swallow its own verification output.
+   */
   async exec(query: string): Promise<ExecResult> {
     if (!this.pool || !this.sql) {
       throw new Error("Database not initialized");
@@ -288,8 +293,11 @@ export class SqlServerAdapter implements DbAdapter {
     try {
       const request = new this.sql.Request(this.pool);
       this.captureMessages(request, messages);
-      await request.batch(query);
-      return { messages };
+      const result = await request.batch(query);
+      // arrayRowMode is never enabled here, so recordsets is the plain
+      // array-of-arrays shape; the driver type just can't prove it.
+      const resultSets = (result.recordsets ?? []) as unknown as any[][];
+      return { messages, resultSets };
     } catch (err) {
       throw this.failure('SQL Server batch error', err, messages);
     }

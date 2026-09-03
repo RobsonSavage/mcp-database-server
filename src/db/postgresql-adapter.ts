@@ -133,7 +133,9 @@ export class PostgresqlAdapter implements DbAdapter {
    * @param query SQL statements to execute
    * @returns Promise that resolves when execution completes. RAISE NOTICE
    *          output is emitted on the pooled client, not the result, and is not
-   *          collected here yet - `messages` is always empty.
+   *          collected here yet - `messages` is always empty. pg.query() of a
+   *          multi-statement string returns only the last statement's rows, so
+   *          `resultSets` is left empty rather than misleading.
    */
   async exec(query: string): Promise<ExecResult> {
     if (!this.pool) {
@@ -142,7 +144,7 @@ export class PostgresqlAdapter implements DbAdapter {
 
     try {
       await this.pool.query(query);
-      return { messages: [] };
+      return { messages: [], resultSets: [] };
     } catch (err) {
       throw new Error(`PostgreSQL batch error: ${(err as Error).message}`);
     }

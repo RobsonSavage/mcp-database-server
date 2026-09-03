@@ -167,7 +167,9 @@ export class MysqlAdapter implements DbAdapter {
 
   /**
    * Execute multiple SQL statements. MySQL has no PRINT-style message channel,
-   * so `messages` is always empty.
+   * so `messages` is always empty. mysql2's multi-statement query() returns
+   * only rows of the last statement, so `resultSets` is left empty rather than
+   * misleading.
    */
   async exec(query: string): Promise<ExecResult> {
     if (!this.pool) {
@@ -175,7 +177,7 @@ export class MysqlAdapter implements DbAdapter {
     }
     try {
       await this.pool.query(query);
-      return { messages: [] };
+      return { messages: [], resultSets: [] };
     } catch (err) {
       throw new Error(`MySQL batch error: ${(err as Error).message}`);
     }

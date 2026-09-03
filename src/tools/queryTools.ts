@@ -214,6 +214,11 @@ export function validateReadQuery(query: string, tool = "read_query"): string {
  * the execute_ddl gate this check backstops - and that check was never a
  * security boundary anyway, since T-SQL does not require semicolons between
  * statements and the split is on `;`.
+ *
+ * Rejections name the right tool for what the batch actually contains, so an
+ * agent that reaches for write_query with a scripted scenario (temp tables,
+ * explicit BEGIN TRAN/ROLLBACK, DECLARE) learns to use execute_ddl in one
+ * round trip instead of bisecting the vocabulary.
  */
 export function validateWriteQuery(query: string): string {
   const statements = splitOnSemicolons(query);
@@ -230,7 +235,12 @@ export function validateWriteQuery(query: string): string {
     }
     if (!(lower.startsWith("insert") || lower.startsWith("update") ||
           lower.startsWith("delete") || lower.startsWith("print"))) {
-      throw new Error("Only INSERT, UPDATE, DELETE, or PRINT operations are allowed with write_query");
+      throw new Error(
+        "write_query accepts only INSERT, UPDATE, DELETE, and PRINT. " +
+        "Scripted batches (temp tables, DECLARE, BEGIN TRAN/ROLLBACK, " +
+        "control flow, SELECT verification) need execute_ddl (requires " +
+        "ALLOW_DDL=true and allowDdl on the connection)"
+      );
     }
   }
 
@@ -323,6 +333,13 @@ export async function writeQuery(query: string, params: any[] = []) {
  * discarded with the driver's info events. On failure the messages produced
  * before the throw are appended to the error.
  *
+ * Result sets the script produced (its SELECTs, in statement order across
+ * batches) are returned as `result_sets` - omitted when the script selected
+ * nothing - so a scripted scenario can verify its own effect in the same call:
+ * BEGIN TRAN ... DML ... SELECT checks ... ROLLBACK runs as one self-contained
+ * unit whose checks come back with the result, and the transaction state lives
+ * and dies inside the single GO batch.
+ *
  * Gated by two independent flags: ALLOW_DDL=true in the process env AND, in
  * multi-connection mode, "allowDdl": true on the resolved connection. The
  * database-level "allowDdl" overrides the server-level one when set.
@@ -358,10 +375,12 @@ export async function executeDdl(query: string) {
     }
 
     let executed = 0;
+    const resultSets: any[][] = [];
     for (const b of batches) {
       for (let i = 0; i < b.repeat; i++) {
         const result = await dbExec(b.sql);
         messages.push(...result.messages);
+        resultSets.push(...result.resultSets);
         executed++;
       }
     }
@@ -370,6 +389,7 @@ export async function executeDdl(query: string) {
       success: true,
       message: `DDL executed (${executed} ${batchWord})`,
       ...(messages.length > 0 ? { messages } : {}),
+      ...(resultSets.length > 0 ? { result_sets: resultSets } : {}),
     });
   } catch (error: any) {
     const printed = messages.length > 0

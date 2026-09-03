@@ -7,9 +7,16 @@
  * an adapter that ignores them drops the output entirely. Adapters for engines
  * with no equivalent channel (or where it is not wired up yet) return an empty
  * array.
+ *
+ * `resultSets` carries the recordsets a script's SELECTs produced, in statement
+ * order. A scripted scenario can therefore verify its own effect in the same
+ * call that produced it (e.g. `BEGIN TRAN ... INSERT ... SELECT ... ROLLBACK`)
+ * without a follow-up read. Engines whose exec channel does not surface rows
+ * return an empty array.
  */
 export interface ExecResult {
   messages: string[];
+  resultSets: any[][];
 }
 
 /**
@@ -55,7 +62,8 @@ export interface DbAdapter {
   /**
    * Execute multiple SQL statements
    * @param query SQL statements to execute
-   * @returns Server-emitted informational messages produced by the batch
+   * @returns Server-emitted informational messages and any recordsets the
+   *          script's SELECTs produced
    */
   exec(query: string): Promise<ExecResult>;
 

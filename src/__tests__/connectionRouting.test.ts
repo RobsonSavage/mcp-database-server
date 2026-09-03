@@ -51,10 +51,10 @@ vi.mock('../db/sqlserver-adapter.js', () => {
       if (fake.barrier) await fake.barrier('run');
       return { changes: 1, lastID: 0, messages: fake.messages ? fake.messages(query) : [] };
     }
-    async exec(query: string): Promise<{ messages: string[] }> {
+    async exec(query: string): Promise<{ messages: string[]; resultSets: any[][] }> {
       this.record('exec', query);
       if (fake.barrier) await fake.barrier('exec');
-      return { messages: fake.messages ? fake.messages(query) : [] };
+      return { messages: fake.messages ? fake.messages(query) : [], resultSets: [] };
     }
     // Resolving these also picks an adapter, so they count as routing reads.
     getListTablesQuery(): string {

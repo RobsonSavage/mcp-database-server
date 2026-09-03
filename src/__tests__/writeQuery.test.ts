@@ -30,7 +30,7 @@ describe('writeQuery execution', () => {
 
   it('validates every GO batch before executing any writes', async () => {
     await expect(writeQuery('UPDATE users SET active=1;\nGO\nDROP TABLE users;'))
-      .rejects.toThrow('Only INSERT, UPDATE, DELETE, or PRINT');
+      .rejects.toThrow('write_query accepts only INSERT, UPDATE, DELETE, and PRINT');
 
     expect(db.dbRun).not.toHaveBeenCalled();
   });
