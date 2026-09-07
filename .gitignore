@@ -135,3 +135,8 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Agent tool scratch output
+.memsearch/
+.syndic/
+critiques/
